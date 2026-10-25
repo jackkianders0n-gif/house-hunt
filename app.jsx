@@ -355,6 +355,20 @@ const saveJSON = (key, value) => { try { localStorage.setItem(key, JSON.stringif
 const SIGN_SECONDS = 7 * 24 * 3600;
 const LIVE_TABLES = ["hh_properties", "hh_agents", "hh_checklist_items", "hh_offers", "hh_settings"];
 
+const IMPORT_TIMEOUT_MS = 110 * 1000;
+
+// Keep raw API errors and JSON out of toasts
+function friendlyError(message) {
+  const m = String(message || "");
+  if (/^\s*[{\[]|claude api error|invalid_request_error|"type"\s*:/i.test(m)) {
+    if (/overloaded|529/i.test(m)) return "Claude is overloaded right now. Try again in a minute.";
+    if (/rate.?limit|429/i.test(m)) return "Claude is busy right now. Wait a minute and try again.";
+    if (/credit balance|billing/i.test(m)) return "The Claude account is out of credit.";
+    return "Couldn't read the listing. Try again in a minute.";
+  }
+  return m.length > 200 ? "Something went wrong. Try again." : m;
+}
+
 function isNetworkError(err) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
   return /failed to fetch|load failed|networkerror|network request failed|fetch failed|timed out|offline/i.test(String(err?.message || err || ""));
@@ -603,17 +617,32 @@ function useHouseHunt() {
       await sb.storage.from(PHOTO_BUCKET).remove([path]);
     },
     async callImport(body) {
-      const { data, error } = await sb.functions.invoke("hh-import", { body });
-      if (error) {
-        let message = error.message || "Something went wrong";
-        try {
-          const j = await error.context.json();
-          if (j?.error) message = j.error;
-        } catch (e) { /* not JSON */ }
-        if (isNetworkError(message)) message = "No signal — importing needs a connection";
-        throw new Error(message);
+      const controller = new AbortController();
+      let timer;
+      const giveUp = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Reading the listing took too long, so it was stopped. Try again, or use fewer screenshots."));
+        }, IMPORT_TIMEOUT_MS);
+      });
+      try {
+        const { data, error } = await Promise.race([
+          sb.functions.invoke("hh-import", { body, signal: controller.signal }),
+          giveUp,
+        ]);
+        if (error) {
+          let message = error.message || "Something went wrong";
+          try {
+            const j = await error.context.json();
+            if (j?.error) message = j.error;
+          } catch (e) { /* not JSON */ }
+          if (isNetworkError(message)) message = "No signal — importing needs a connection";
+          throw new Error(friendlyError(message));
+        }
+        return data;
+      } finally {
+        clearTimeout(timer);
       }
-      return data;
     },
   }), [attempt]);
 
