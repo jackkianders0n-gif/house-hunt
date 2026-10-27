@@ -445,6 +445,7 @@ button.pill { height: 32px; padding: 0 10px 0 12px; border-radius: 16px; font-si
 .sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
 .sheet-foot { flex: none; display: flex; gap: 10px; padding: 12px 20px calc(env(safe-area-inset-bottom) + 14px); border-top: 1px solid var(--line); }
 .sheet-foot .btn { flex: 1; }
+.sheet-body:last-child { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
 .option-list { display: flex; flex-direction: column; overflow: hidden; }
 .option {
   display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 16px; width: 100%;
