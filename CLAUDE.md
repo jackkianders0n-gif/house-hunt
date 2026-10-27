@@ -34,15 +34,16 @@ A shared phone app for Jack and Jakey's flat hunt: homes imported from Rightmove
 
 ## Data model (Supabase, all RLS: members only via `hh_is_member()`)
 - `hh_members` — the two user ids allowed in. No policies; read only by the security-definer `hh_is_member()`.
-- `hh_properties` — one row per flat. `status` ∈ shortlisted, viewing_booked, viewed, offer_made, offer_accepted, not_for_us. `checklist` jsonb `{ itemId: bool }`, `price_history` jsonb `[{ price, at }]` (previous prices), `listing_status` (Rightmove: Available / Under offer / Sold STC / Reserved), `photo_path` in the private `hh-photos` bucket.
+- `hh_properties` — one row per flat. `status` ∈ shortlisted, viewing_booked, viewed, offer_made, offer_accepted, not_for_us. `checklist` jsonb `{ itemId: bool }`, `price_history` jsonb `[{ price, at }]` (previous prices), `listing_status` (Rightmove: Available / Under offer / Sold STC / Reserved), `photo_path` in the private `hh-photos` bucket. `ratings` jsonb `{ userId: 1–5 }` — each person's stars, set with RPC `hh_set_rating(property, value)` (0 clears; only touches your own).
 - `hh_agents` (incl. `website`, `address`), `hh_offers` (outcome ∈ waiting, rejected, countered, accepted, withdrawn), `hh_checklist_items`, `hh_settings` (key/value: `lease_warning_years`, `council_tax` per band, `calendar_key`, `import_key`).
 - `hh_inbox` — listings shared from Safari. `status` ∈ processing, ready, failed, done; `listing`/`location` are the same shapes the import action returns; `agent_lookup` is `{ agency, phone, email, website, address, source_url }`, `{ error }` or null; `photo_path` under `inbox/` in `hh-photos`; `payload` `{ text, data }` kept for Try again. The app hides `done` rows and treats `processing` older than 5 minutes as failed.
 - RPC `hh_set_check(property, item, value)` ticks one item without overwriting the other person's ticks.
+- RPC `hh_member_names()` (security definer, members only) returns `{ user_id, display_name }` so ratings can be labelled Jack / Jakey; the store exposes `members` and `me`.
 - All `hh_` tables are in the `supabase_realtime` publication — the app reloads on changes.
 
 ## How the app handles data
 - `useHouseHunt()` loads everything, caches it in localStorage, signs photo URLs, and subscribes to realtime.
-- Offline: `patchProperty`, `setCheck`, `saveOffer`, `deleteOffer` go through `attempt()` — on a network error the change is queued (`hh-queue-v1`), shown in the sync bar, re-applied over fresh data by `overlayQueue()`, and flushed on reconnect. New writes that should work offline must use this path; anything else (new homes, photos, agents, imports) needs signal and says so.
+- Offline: `patchProperty`, `setCheck`, `setRating`, `saveOffer`, `deleteOffer` go through `attempt()` — on a network error the change is queued (`hh-queue-v1`), shown in the sync bar, re-applied over fresh data by `overlayQueue()`, and flushed on reconnect. New writes that should work offline must use this path; anything else (new homes, photos, agents, imports) needs signal and says so.
 - Routes are hash based: `#/homes`, `#/map`, `#/inbox`, `#/import[/id]`, `#/review`, `#/edit/id[/field]` (focuses that input), `#/property/id[/checklist]`, `#/agents`, `#/agent/id`, `#/compare`, `#/settings`.
 - Inbox drafts carry `inboxId`/`inboxPhotoPath`; saving the review calls `finishInbox` (marks done, deletes the inbox photo). New-agent drafts with an agency run `agent_lookup` from the review screen (`d.lookup` holds its state); inbox items arrive with it already done.
 
