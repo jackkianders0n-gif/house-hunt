@@ -543,3 +543,10 @@ button.inbox-main { cursor: pointer; }
 .ratings-card .hint { margin: 0; font-size: 12px; }
 .sort-row { display: flex; justify-content: flex-end; margin: -4px 0 -6px; }
 .sort-row .link-btn { display: inline-flex; align-items: center; gap: 4px; min-height: 36px; }
+.sort-row .sort-dir { font-weight: 600; color: var(--muted); }
+.sort-option { display: flex; flex-direction: column; gap: 2px; }
+.sort-option .hint { font-size: 12px; }
+.sort-tag {
+  display: inline-block; padding: 3px 8px; border-radius: 8px; background: var(--accent-tint); color: #123F2F;
+  font-size: 12px; font-weight: 800;
+}

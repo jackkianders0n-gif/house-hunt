@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.5.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -115,9 +115,32 @@ const averageRating = (p) => {
   const vals = Object.values(p.ratings || {}).map(Number).filter((v) => v >= 1 && v <= 5);
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 };
-// Highest average first; unrated homes keep the usual order at the end
-const sortByRating = (list) =>
-  sortHomes(list).sort((a, b) => (averageRating(b) ?? -1) - (averageRating(a) ?? -1));
+// Ways to order the homes list. best: which end is best ("asc" = lowest first). tag: shown on cards when
+// the figure isn't already there.
+const SORTS = [
+  { key: "status", label: "Status" },
+  { key: "rating", label: "Our rating", get: (p) => averageRating(p), best: "desc" },
+  { key: "price", label: "Price", get: (p) => p.price, best: "asc" },
+  { key: "size", label: "Size", get: (p) => p.size_sqft, best: "desc" },
+  { key: "ppsf", label: "£ per sq ft", get: (p) => (p.price && p.size_sqft ? Math.round(p.price / p.size_sqft) : null), best: "asc",
+    tag: (v) => `£${v} per sq ft` },
+  { key: "lease", label: "Lease left", get: (p) => p.lease_years, best: "desc", tag: (v) => `${v} years left on the lease` },
+  { key: "service", label: "Service charge", get: (p) => p.service_charge, best: "asc", tag: (v) => `${money(v)} a year service charge` },
+  { key: "running", label: "Running costs / mo", get: (p, settings) => runningCosts(p, settings)?.monthly ?? null, best: "asc",
+    tag: (v) => `${money(v)} a month running costs` },
+];
+const SORT = Object.fromEntries(SORTS.map((x) => [x.key, x]));
+const sortWords = (dir) => (dir === "asc" ? "low to high" : "high to low");
+// Homes without that figure keep the usual order at the end
+function sortHomesBy(list, sort, flipped, settings) {
+  const base = sortHomes(list);
+  if (!sort.get) return base;
+  const dir = flipped ? (sort.best === "asc" ? "desc" : "asc") : sort.best;
+  const known = base.filter((p) => sort.get(p, settings) != null);
+  const unknown = base.filter((p) => sort.get(p, settings) == null);
+  known.sort((a, b) => (sort.get(a, settings) - sort.get(b, settings)) * (dir === "asc" ? 1 : -1));
+  return [...known, ...unknown];
+}
 const checklistScore = (p, items) => items.filter((i) => p.checklist && p.checklist[i.id] === true).length;
 const leaseLimit = (settings) => Number(settings?.lease_warning_years) || DEFAULT_LEASE_WARNING;
 const isShortLease = (p, settings) =>
@@ -871,8 +894,18 @@ function homesCentre(properties) {
 function Homes({ store, view }) {
   const [filter, setFilter] = useState(() => sessionStorage.getItem("hh-filter") || "all");
   useEffect(() => { sessionStorage.setItem("hh-filter", filter); }, [filter]);
-  const [sort, setSort] = useState(() => sessionStorage.getItem("hh-sort") || "status");
-  useEffect(() => { sessionStorage.setItem("hh-sort", sort); }, [sort]);
+  const [sortKey, setSortKey] = useState(() => (SORT[sessionStorage.getItem("hh-sort")] ? sessionStorage.getItem("hh-sort") : "status"));
+  const [flipped, setFlipped] = useState(() => sessionStorage.getItem("hh-sort-flipped") === "yes");
+  const [choosingSort, setChoosingSort] = useState(false);
+  useEffect(() => {
+    sessionStorage.setItem("hh-sort", sortKey);
+    sessionStorage.setItem("hh-sort-flipped", flipped ? "yes" : "no");
+  }, [sortKey, flipped]);
+  const pickSort = (key) => {
+    if (key === sortKey) setFlipped((f) => !f);
+    else { setSortKey(key); setFlipped(false); }
+    setChoosingSort(false);
+  };
   useEffect(() => { sessionStorage.setItem("hh-homes-view", view); }, [view]);
 
   const { properties } = store;
@@ -881,8 +914,14 @@ function Homes({ store, view }) {
   const allPool = view === "map" ? properties.filter((p) => p.status !== "not_for_us") : properties;
   const active = filter !== "all" && !counts[filter] ? "all" : filter;
   const pool = active === "all" ? allPool : properties.filter((p) => p.status === active);
-  const byRating = sort === "rating" && view !== "map";
-  const shown = byRating ? sortByRating(pool) : sortHomes(pool);
+  const sort = SORT[sortKey];
+  const sortDir = sort.best ? (flipped ? (sort.best === "asc" ? "desc" : "asc") : sort.best) : null;
+  const shown = view === "map" ? sortHomes(pool) : sortHomesBy(pool, sort, flipped, store.settings);
+  const sortTag = (p) => {
+    if (!sort.tag) return null;
+    const v = sort.get(p, store.settings);
+    return v == null ? null : sort.tag(v);
+  };
   const chips = [{ key: "all", label: "All", count: allPool.length }, ...STATUSES.filter((s) => counts[s.key]).map((s) => ({ key: s.key, label: s.label, count: counts[s.key] }))];
 
   return (
@@ -930,16 +969,39 @@ function Homes({ store, view }) {
               <a className="btn btn-primary btn-pill" href="#/import"><Icon name="plus" size={18} stroke={2.2} />Import</a>
             </div>
           )}
+          {choosingSort && (
+            <Sheet title="Sort homes" onClose={() => setChoosingSort(false)}>
+              <div className="card option-list">
+                {SORTS.map((x) => {
+                  const active = x.key === sortKey;
+                  return (
+                    <button key={x.key} type="button" className="option" aria-pressed={active} onClick={() => pickSort(x.key)}>
+                      <span className="sort-option">
+                        <span>{x.label}</span>
+                        {x.best && (
+                          <span className="hint">
+                            {active ? `${sortWords(sortDir)} · tap to flip` : x.best === "asc" ? "Lowest first" : "Highest first"}
+                          </span>
+                        )}
+                      </span>
+                      {active && <span className="tick"><Icon name="check" size={20} stroke={2.6} /></span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="hint">Homes without that detail go to the end.</p>
+            </Sheet>
+          )}
           {properties.length > 1 && (
             <div className="sort-row">
-              <button type="button" className="link-btn" onClick={() => setSort(byRating ? "status" : "rating")}
-                aria-label={`Sorted by ${byRating ? "your ratings" : "status"}. Change sort`}>
-                <Icon name={byRating ? "star" : "down"} size={16} stroke={2.2} />
-                {byRating ? "Sorted by our rating" : "Sorted by status"}
+              <button type="button" className="link-btn" onClick={() => setChoosingSort(true)}
+                aria-label={`Sorted by ${sort.label.toLowerCase()}${sortDir ? `, ${sortWords(sortDir)}` : ""}. Change sort`}>
+                <Icon name={sortDir === "asc" ? "up" : "down"} size={16} stroke={2.4} />
+                Sorted by {sort.key === "rating" ? "our rating" : sort.label.toLowerCase()}{sortDir && <span className="sort-dir"> · {sortWords(sortDir)}</span>}
               </button>
             </div>
           )}
-          {shown.map((p) => <PropertyCard key={p.id} p={p} store={store} />)}
+          {shown.map((p) => <PropertyCard key={p.id} p={p} store={store} tag={sortTag(p)} />)}
         </main>
       )}
     </div>
@@ -966,7 +1028,7 @@ function cardMeta(p, store) {
   return "";
 }
 
-function PropertyCard({ p, store }) {
+function PropertyCard({ p, store, tag }) {
   const agent = store.agentById[p.agent_id];
   const meta = cardMeta(p, store);
   const facts = factsLine(p);
@@ -983,6 +1045,7 @@ function PropertyCard({ p, store }) {
           <span className="prop-address">{p.address}</span>
           <span className="prop-price">{money(p.price)}</span>
           {reduced && <span className="reduced">Reduced from {money(reduced.price)}</span>}
+          {tag && <span className="sort-tag">{tag}</span>}
           <RatingLine p={p} members={store.members} />
         </div>
       </div>
