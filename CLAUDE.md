@@ -55,4 +55,5 @@ Manrope; ground `#F3F4F1`, ink `#17211C`, accent green `#1E6A50`; status colours
 ## Before pushing
 - Check `app.jsx` still parses (a JSX syntax error shows a blank screen on the phones).
 - Bump `CACHE` in `sw.js`.
+- Bump `APP_VERSION` in `app.jsx` (shown in Settings, so Jack can tell when a phone has the update).
 - Say what Jack needs to do outside the repo (SQL to run, function to redeploy), if anything.
