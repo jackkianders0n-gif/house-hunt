@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -53,6 +53,17 @@ const FIELD_LABELS = {
   listing_status: "Rightmove status", rightmove_url: "Rightmove link",
 };
 const DEFAULT_LEASE_WARNING = 85;
+// Blank details worth asking the agent about, in the order you'd ask
+const ASK_FIELDS = [
+  { key: "price", question: "What's the asking price?" },
+  { key: "size_sqft", question: "What's the floor area?" },
+  { key: "tenure", question: "Is it leasehold or freehold?" },
+  { key: "lease_years", question: "How many years are left on the lease?", leaseOnly: true },
+  { key: "service_charge", question: "What's the service charge?", leaseOnly: true },
+  { key: "ground_rent", question: "What's the ground rent?", leaseOnly: true },
+  { key: "council_tax", question: "What council tax band is it?" },
+];
+const INBOX_STALE_MS = 5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -139,6 +150,10 @@ const directionsHref = (p) =>
   p.lat != null && p.lng != null
     ? `https://maps.apple.com/?daddr=${p.lat},${p.lng}`
     : `https://maps.apple.com/?daddr=${encodeURIComponent([p.address, p.postcode].filter(Boolean).join(", "))}`;
+const importFunctionUrl = () => `${SUPABASE_URL}/functions/v1/hh-import`;
+const newKey = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
+const webHref = (url) => (/^https?:\/\//i.test(url || "") ? url : `https://${url}`);
+const hostOf = (url) => { try { return new URL(webHref(url)).hostname.replace(/^www\./, ""); } catch (e) { return url; } };
 const calendarUrl = (key, id) =>
   `${SUPABASE_URL}/functions/v1/hh-calendar?key=${encodeURIComponent(key)}${id ? `&id=${encodeURIComponent(id)}` : ""}`;
 const normAgency = (s) =>
@@ -312,6 +327,7 @@ const ICONS = {
   x: <path d="M6 6l12 12M18 6 6 18" />,
   trash: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4h6v3" />,
   refresh: <path d="M20 11a8 8 0 0 0-14.9-3.9M4 4v4h4M4 13a8 8 0 0 0 14.9 3.9M20 20v-4h-4" />,
+  inbox: <><path d="M3 13h5l1.5 3h5L16 13h5" /><path d="M5.5 5h13L21 13v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z" /></>,
   copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></>,
 };
@@ -353,7 +369,7 @@ const QUEUE_KEY = "hh-queue-v1";
 const loadJSON = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch (e) { return fallback; } };
 const saveJSON = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage full */ } };
 const SIGN_SECONDS = 7 * 24 * 3600;
-const LIVE_TABLES = ["hh_properties", "hh_agents", "hh_checklist_items", "hh_offers", "hh_settings"];
+const LIVE_TABLES = ["hh_properties", "hh_agents", "hh_checklist_items", "hh_offers", "hh_settings", "hh_inbox"];
 
 const IMPORT_TIMEOUT_MS = 110 * 1000;
 
@@ -407,6 +423,7 @@ function useHouseHunt() {
   const [offers, setOffers] = useState(cached?.offers ?? []);
   const [settings, setSettings] = useState(cached?.settings ?? {});
   const [photos, setPhotos] = useState(cached?.photos ?? {});
+  const [inbox, setInbox] = useState(cached?.inbox ?? []);
   const [loaded, setLoaded] = useState(!!cached);
   const [offline, setOffline] = useState(false);
   const queueRef = useRef(loadJSON(QUEUE_KEY, []));
@@ -416,8 +433,8 @@ function useHouseHunt() {
   const flushing = useRef(false);
 
   useEffect(() => {
-    if (loaded) saveJSON(CACHE_KEY, { properties, agents, items, offers, settings, photos });
-  }, [properties, agents, items, offers, settings, photos, loaded]);
+    if (loaded) saveJSON(CACHE_KEY, { properties, agents, items, offers, settings, photos, inbox });
+  }, [properties, agents, items, offers, settings, photos, inbox, loaded]);
 
   const saveQueue = () => { saveJSON(QUEUE_KEY, queueRef.current); setPending(queueRef.current.length); };
   const enqueue = (entry) => {
@@ -446,12 +463,14 @@ function useHouseHunt() {
 
   const refresh = useCallback(async () => {
     try {
-      const [p, a, i, o, s] = await Promise.all([
+      const [p, a, i, o, s, ib] = await Promise.all([
         sb.from("hh_properties").select("*").order("created_at", { ascending: false }),
         sb.from("hh_agents").select("*").order("created_at", { ascending: true }),
         sb.from("hh_checklist_items").select("*").order("position", { ascending: true }),
         sb.from("hh_offers").select("*").order("made_at", { ascending: true }),
         sb.from("hh_settings").select("*"),
+        sb.from("hh_inbox").select("id, url, status, error, listing, location, agent_lookup, photo_path, created_at, updated_at")
+          .neq("status", "done").order("created_at", { ascending: false }),
       ]);
       const err = p.error || a.error || i.error || o.error || s.error;
       if (err) throw err;
@@ -461,9 +480,11 @@ function useHouseHunt() {
       setAgents(a.data);
       setItems(i.data);
       setSettings(Object.fromEntries(s.data.map((r) => [r.key, r.value])));
+      // The inbox is optional: an older database without hh_inbox still loads
+      if (!ib.error) setInbox(ib.data);
       setLoaded(true);
       if (!queueRef.current.length) setOffline(false);
-      signPhotos(p.data);
+      signPhotos(ib.error ? p.data : [...p.data, ...ib.data]);
     } catch (e) {
       console.error(e);
       setOffline(true);
@@ -616,6 +637,27 @@ function useHouseHunt() {
     async removePhoto(path) {
       await sb.storage.from(PHOTO_BUCKET).remove([path]);
     },
+    async downloadPhoto(path) {
+      const { data, error } = await sb.storage.from(PHOTO_BUCKET).download(path);
+      if (error) throw error;
+      return data;
+    },
+    async retryInbox(id) {
+      await this.callImport({ action: "inbox_retry", id });
+      setInbox((list) => list.map((x) => (x.id === id ? { ...x, status: "processing", error: null, updated_at: new Date().toISOString() } : x)));
+    },
+    async discardInbox(item) {
+      const { error } = await sb.from("hh_inbox").delete().eq("id", item.id);
+      if (error) throw isNetworkError(error) ? new Error("No signal — this needs a connection") : error;
+      if (item.photo_path) sb.storage.from(PHOTO_BUCKET).remove([item.photo_path]).catch(() => {});
+      setInbox((list) => list.filter((x) => x.id !== item.id));
+    },
+    async finishInbox(id, photoPath) {
+      setInbox((list) => list.filter((x) => x.id !== id));
+      const { error } = await sb.from("hh_inbox").update({ status: "done", photo_path: null }).eq("id", id);
+      if (error) console.error(error);
+      if (photoPath) sb.storage.from(PHOTO_BUCKET).remove([photoPath]).catch(() => {});
+    },
     async callImport(body) {
       const controller = new AbortController();
       let timer;
@@ -651,7 +693,7 @@ function useHouseHunt() {
     .sort((a, b) => (b.made_at || "").localeCompare(a.made_at || "")), [offers]);
   const photoUrl = useCallback((path) => (path && photos[path] ? photos[path].url : null), [photos]);
 
-  return { properties, agents, items, offers, settings, loaded, offline, pending, refresh, sync, agentById, offersFor, photoUrl, ...api };
+  return { properties, agents, items, offers, settings, inbox, loaded, offline, pending, refresh, sync, agentById, offersFor, photoUrl, ...api };
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +860,10 @@ function Homes({ store, view }) {
           </div>
           <div className="head-actions">
             <a className="icon-btn" href="#/settings" aria-label="Settings"><Icon name="settings" size={22} /></a>
+            <a className="icon-btn badge-wrap" href="#/inbox" aria-label={store.inbox.length ? `Inbox, ${store.inbox.length} waiting` : "Inbox"}>
+              <Icon name="inbox" size={22} />
+              {store.inbox.length > 0 && <span className="badge">{store.inbox.length}</span>}
+            </a>
             <a className="btn btn-primary btn-pill" href="#/import"><Icon name="plus" size={18} stroke={2.2} />Import</a>
           </div>
         </div>
@@ -981,6 +1027,8 @@ function HomesMap({ homes, store }) {
 // ---------------------------------------------------------------------------
 const DRAFT_FIELDS = ["price", "beds", "baths", "size_sqft", "tenure", "lease_years", "service_charge", "ground_rent", "council_tax", "listing_status", "rightmove_url"];
 
+const EMPTY_AGENT = { name: "", agency: "", phone: "", email: "", website: "", address: "" };
+
 function emptyDraft(link = "") {
   return {
     mode: "new", id: uuid(), fromImport: false,
@@ -988,9 +1036,9 @@ function emptyDraft(link = "") {
     service_charge: "", ground_rent: "", council_tax: "", listing_status: "", key_features: [], rightmove_url: link,
     status: "shortlisted", viewing_date: "", viewing_time: "",
     lat: null, lng: null, precision: "none",
-    agentChoice: "none", agentMatched: false, newAgent: { name: "", agency: "", phone: "", email: "" },
+    agentChoice: "none", agentMatched: false, newAgent: { ...EMPTY_AGENT }, lookup: null,
     photo: null, photoCandidate: null, existingPhotoPath: null, photoRemoved: false,
-    missing: [], source: "", changes: [], dupeDismissed: false,
+    missing: [], source: "", changes: [], dupeDismissed: false, inboxId: null, inboxPhotoPath: null,
   };
 }
 
@@ -1011,7 +1059,7 @@ function draftFromListing(listing, location, photo, sourceLabel, link, store) {
     precision: location ? location.precision : "none",
     agentChoice: match ? match.id : listing.agency || listing.agent_phone ? "new" : "none",
     agentMatched: !!match,
-    newAgent: { name: "", agency: listing.agency || "", phone: listing.agent_phone || "", email: "" },
+    newAgent: { ...EMPTY_AGENT, agency: listing.agency || "", phone: listing.agent_phone || "" },
     photo,
     missing: listing.missing || [],
     source: sourceLabel,
@@ -1052,11 +1100,36 @@ function draftUpdatingHome(existing, incoming) {
   if (!d.key_features.length && incoming.key_features?.length) d.key_features = incoming.key_features;
   if (d.lat == null && incoming.lat != null) { d.lat = incoming.lat; d.lng = incoming.lng; d.precision = incoming.precision; }
   if (d.agentChoice === "none" && incoming.agentChoice !== "none") {
-    d.agentChoice = incoming.agentChoice; d.agentMatched = incoming.agentMatched; d.newAgent = incoming.newAgent;
+    d.agentChoice = incoming.agentChoice; d.agentMatched = incoming.agentMatched;
+    d.newAgent = incoming.newAgent; d.lookup = incoming.lookup;
   }
+  d.inboxId = incoming.inboxId; d.inboxPhotoPath = incoming.inboxPhotoPath;
   d.photoCandidate = incoming.photo || null;
   if (!existing.photo_path && incoming.photo) { d.photo = incoming.photo; d.photoCandidate = null; }
   d.changes = changes;
+  return d;
+}
+
+// Fill the blank new-agent fields from what the web search found
+function applyLookup(d, found) {
+  if (!found) return { ...d, lookup: { state: "none" } };
+  const na = { ...d.newAgent };
+  ["agency", "phone", "email", "website", "address"].forEach((k) => { if (!String(na[k] || "").trim() && found[k]) na[k] = found[k]; });
+  return { ...d, newAgent: na, lookup: { state: "found", source: found.source_url || null } };
+}
+
+// An inbox item, ready to check on the review screen
+async function draftFromInbox(item, store) {
+  let photo = null;
+  if (item.photo_path) {
+    try { photo = { file: await store.downloadPhoto(item.photo_path), box: FULL_BOX, from: "the Rightmove photo" }; }
+    catch (e) { console.error(e); toast("Couldn't load the photo — add one on the next screen"); }
+  }
+  let d = { ...draftFromListing(item.listing, item.location, photo, "the shared Rightmove page", item.url, store), inboxId: item.id, inboxPhotoPath: item.photo_path };
+  const found = item.agent_lookup;
+  if (d.agentChoice === "new" && found) {
+    d = found.error ? { ...d, lookup: { state: "error", message: found.error } } : applyLookup(d, found);
+  }
   return d;
 }
 
@@ -1337,7 +1410,7 @@ function LocationPicker({ lat, lng, onChange, fallback }) {
   return <div className="loc-map" ref={el} aria-label="Map: drag the pin, or tap to place it" />;
 }
 
-function ReviewScreen({ store, initial }) {
+function ReviewScreen({ store, initial, focus }) {
   const [d, setD] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [cropping, setCropping] = useState(false);
@@ -1354,6 +1427,32 @@ function ReviewScreen({ store, initial }) {
   const missingLabels = d.missing.filter((m) => FIELD_LABELS[m]).map((m) => FIELD_LABELS[m]);
   const dupe = d.mode === "new" && !d.dupeDismissed ? findDuplicate(store.properties, d) : null;
   const title = { new: "Check details", edit: "Edit home", update: "Check changes" }[d.mode];
+
+  // Tapped a question on "Ask the agent": go straight to that field
+  useEffect(() => {
+    if (!focus) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(focus);
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.focus({ preventScroll: true });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [focus]);
+
+  // A new agent from an import: look up the branch online while you check the rest
+  useEffect(() => {
+    if (!d.fromImport || d.mode === "edit" || d.agentChoice !== "new" || d.lookup || !d.newAgent.agency.trim()) return;
+    let live = true;
+    setD((x) => ({ ...x, lookup: { state: "looking" } }));
+    store.callImport({ action: "agent_lookup", agency: d.newAgent.agency, address: d.address })
+      .then((res) => { if (live) setD((x) => applyLookup(x, res.agent)); })
+      .catch((e) => { if (live) setD((x) => ({ ...x, lookup: { state: "error", message: e.message } })); });
+    return () => {
+      live = false;
+      setD((x) => (x.lookup?.state === "looking" ? { ...x, lookup: null } : x));
+    };
+  }, [d.agentChoice]);
 
   const pickPhoto = (file) => {
     if (!file) return;
@@ -1393,6 +1492,7 @@ function ReviewScreen({ store, initial }) {
           const a = await store.saveAgent({
             name: na.name.trim() || null, agency: na.agency.trim() || null,
             phone: na.phone.trim() || null, email: na.email.trim() || null,
+            website: na.website.trim() || null, address: na.address.trim() || null,
           });
           agentId = a.id;
         }
@@ -1429,6 +1529,7 @@ function ReviewScreen({ store, initial }) {
       };
       const saved = await store.saveProperty(row);
       if (d.existingPhotoPath && d.existingPhotoPath !== photoPath) store.removePhoto(d.existingPhotoPath).catch(() => {});
+      if (d.inboxId) store.finishInbox(d.inboxId, d.inboxPhotoPath);
       toast({ new: "Home saved", edit: "Changes saved", update: "Home updated" }[d.mode]);
       location.replace(`#/property/${saved.id}`);
     } catch (e) {
@@ -1510,7 +1611,7 @@ function ReviewScreen({ store, initial }) {
           {d.photo?.from && <p className="hint">Cropped from {d.photo.from}.</p>}
           {d.photoCandidate && (
             <button type="button" className="btn btn-outline" onClick={() => setD((x) => ({ ...x, photo: x.photoCandidate, photoCandidate: null, photoRemoved: false }))}>
-              Use the photo from the new {d.photoCandidate.from && d.photoCandidate.from.startsWith("screenshot") ? "screenshots" : "PDF"}
+              Use the photo from {d.photoCandidate.from === "the PDF" ? "the new PDF" : d.photoCandidate.from && d.photoCandidate.from.startsWith("screenshot") ? "the new screenshots" : "Rightmove"}
             </button>
           )}
           <div className="grid2">
@@ -1633,6 +1734,14 @@ function ReviewScreen({ store, initial }) {
                   <input id="agent-email" className="input" type="email" value={d.newAgent.email} placeholder="Optional" onChange={(e) => setAgentField("email", e.target.value)} />
                 </Field>
               </div>
+              <Field label="Website" id="agent-website">
+                <input id="agent-website" className="input" type="url" inputMode="url" value={d.newAgent.website} placeholder="Optional" onChange={(e) => setAgentField("website", e.target.value)} />
+              </Field>
+              <Field label="Branch address" id="agent-address">
+                <input id="agent-address" className="input" value={d.newAgent.address} placeholder="Optional" onChange={(e) => setAgentField("address", e.target.value)} />
+              </Field>
+              <LookupNote lookup={d.lookup} />
+              <SignaturePaste store={store} onFill={(found) => setD((x) => ({ ...x, newAgent: mergeAgent(x.newAgent, found) }))} />
             </>
           )}
         </section>
@@ -1672,6 +1781,76 @@ function ReviewScreen({ store, initial }) {
         <CropEditor file={d.photo.file} box={d.photo.box} onCancel={() => setCropping(false)}
           onDone={(box) => { setD((x) => ({ ...x, photo: { ...x.photo, box } })); setCropping(false); }} />
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inbox: listings shared from Safari
+// ---------------------------------------------------------------------------
+function InboxScreen({ store, setDraft }) {
+  const [busyId, setBusyId] = useState(null);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const stuck = (x) => x.status === "processing" && Date.now() - new Date(x.updated_at || x.created_at).getTime() > INBOX_STALE_MS;
+  const run = async (item, work) => {
+    setBusyId(item.id);
+    try { await work(); } catch (e) { console.error(e); toast(e.message || "Something went wrong", "error"); }
+    finally { setBusyId(null); }
+  };
+  const open = (item) => run(item, async () => { setDraft(await draftFromInbox(item, store)); go("review"); });
+  const retry = (item) => run(item, async () => { await store.retryInbox(item.id); toast("Reading it again"); });
+  const discard = (item) => {
+    if (!window.confirm("Discard this listing from the inbox?")) return;
+    run(item, () => store.discardInbox(item));
+  };
+
+  return (
+    <div className="screen">
+      <BackBar to="homes" title="Inbox" />
+      <main className="scroll">
+        {store.inbox.length === 0 && (
+          <div className="empty">
+            <Icon name="inbox" size={40} stroke={1.4} />
+            <h2>Nothing waiting</h2>
+            <p>Share a Rightmove listing from Safari with the House Hunt Shortcut and it lands here, ready to check.</p>
+            <a className="btn btn-outline btn-pill" href="#/settings">Share button setup</a>
+          </div>
+        )}
+        {store.inbox.map((item) => {
+          const failed = item.status === "failed" || stuck(item);
+          const ready = item.status === "ready";
+          const l = item.listing || {};
+          const dupe = ready ? findDuplicate(store.properties, { id: null, rightmove_url: item.url, address: l.address, price: l.price }) : null;
+          const state = ready ? (dupe ? "Ready — you already have this one, so you can update it" : "Ready to check")
+            : failed ? (item.status === "failed" ? item.error || "Couldn't read it." : "This is taking too long.")
+            : "Reading the listing…";
+          const Main = ready ? "button" : "div";
+          const busy = busyId === item.id;
+          return (
+            <div key={item.id} className="card inbox-card">
+              <Main {...(ready ? { type: "button", onClick: () => open(item), disabled: busy } : {})} className="inbox-main">
+                <Thumb url={store.photoUrl(item.photo_path)} size={64} />
+                <span className="inbox-text">
+                  <span className="addr">{l.address || `Rightmove listing ${rightmoveId(item.url) || ""}`.trim()}</span>
+                  {ready && <span className="sub">{[l.price != null && money(l.price), l.beds != null && `${l.beds} bed`].filter(Boolean).join(" · ")}</span>}
+                  <span className={"state" + (failed ? " warn-text" : ready ? " ok" : "")}>{busy && ready ? "Opening…" : state}</span>
+                </span>
+                {ready && <Icon name="chevron" size={18} color="#56635C" />}
+              </Main>
+              <div className="inbox-actions">
+                {failed && <button type="button" className="link-btn" onClick={() => retry(item)} disabled={busy}>Try again</button>}
+                {failed && <a className="link-btn" href={item.url} target="_blank" rel="noopener">Open on Rightmove</a>}
+                <button type="button" className="link-btn danger" onClick={() => discard(item)} disabled={busy}>Discard</button>
+              </div>
+            </div>
+          );
+        })}
+      </main>
     </div>
   );
 }
@@ -1981,6 +2160,7 @@ function DetailsTab({ p, agent, store, onOffer }) {
 
       <section className="section">
         <h2 className="section-title">Estate agent</h2>
+        <AskAgent p={p} />
         {agent ? (
           <div className="card agent-card">
             <a className="agent-link" href={`#/agent/${agent.id}`}>
@@ -2009,6 +2189,29 @@ function DetailsTab({ p, agent, store, onOffer }) {
         <Icon name="refresh" size={18} stroke={2} />Update from Rightmove
       </a>
     </>
+  );
+}
+
+function AskAgent({ p }) {
+  if (p.status === "not_for_us") return null;
+  const freehold = p.tenure === "Freehold";
+  const asks = ASK_FIELDS.filter((f) => !(f.leaseOnly && freehold) && (p[f.key] == null || p[f.key] === ""));
+  if (!asks.length) return null;
+  return (
+    <section className="card ask-card" aria-label="Ask the agent">
+      <div className="ask-head">
+        <span className="label">Ask the agent</span>
+        <span className="hint">Tap one to fill it in</span>
+      </div>
+      <div className="option-list">
+        {asks.map((f) => (
+          <a key={f.key} className="option" href={`#/edit/${p.id}/${f.key}`}>
+            <span>{f.question}</span>
+            <Icon name="chevron" size={18} color="#56635C" />
+          </a>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -2102,10 +2305,74 @@ function NotesBox({ p, store }) {
 // ---------------------------------------------------------------------------
 // Agents
 // ---------------------------------------------------------------------------
+// Found values replace what's there; blanks leave your typing alone
+function mergeAgent(current, found) {
+  const next = { ...current };
+  ["name", "agency", "phone", "email", "website", "address"].forEach((k) => { if (found[k]) next[k] = found[k]; });
+  return next;
+}
+
+function SignaturePaste({ store, onFill }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fill = async () => {
+    if (!text.trim()) { toast("Paste the email or signature first"); return; }
+    setBusy(true);
+    try {
+      const res = await store.callImport({ action: "agent_from_text", text });
+      const found = res.agent || {};
+      if (!["name", "agency", "phone", "email", "website", "address"].some((k) => found[k])) { toast("Couldn't find any details in that"); return; }
+      onFill(found);
+      setOpen(false);
+      setText("");
+      toast("Filled in — check the details");
+    } catch (e) {
+      toast(e.message || "Couldn't read that", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!open) {
+    return (
+      <button type="button" className="btn btn-outline" onClick={() => setOpen(true)}>
+        <Icon name="paste" size={18} stroke={2} />Paste an email or signature
+      </button>
+    );
+  }
+  return (
+    <div className="paste-box">
+      <Field label="Email or signature" id="sig-text" hint="Paste the agent's email or signature. The details are filled in for you to check.">
+        <textarea id="sig-text" className="textarea" rows={5} value={text} onChange={(e) => setText(e.target.value)} />
+      </Field>
+      <div className="grid2">
+        <button type="button" className="btn btn-outline" onClick={() => { setOpen(false); setText(""); }}>Cancel</button>
+        <button type="button" className="btn btn-primary" onClick={fill} disabled={busy}>{busy ? "Reading…" : "Fill in"}</button>
+      </div>
+    </div>
+  );
+}
+
+function LookupNote({ lookup }) {
+  if (!lookup) return null;
+  if (lookup.state === "looking") return <p className="hint">Looking up the branch online…</p>;
+  if (lookup.state === "none") return <p className="hint">Couldn't find this branch online.</p>;
+  if (lookup.state === "error") return <p className="hint">Branch lookup: {lookup.message}</p>;
+  return (
+    <p className="hint lookup-note">
+      <Icon name="search" size={16} stroke={2} />
+      <span>
+        Found online — check it.
+        {lookup.source && <> <a href={lookup.source} target="_blank" rel="noopener">Source: {hostOf(lookup.source)}</a></>}
+      </span>
+    </p>
+  );
+}
+
 function AgentSheet({ agent, store, onClose, onSaved }) {
   const [f, setF] = useState({
     name: agent?.name || "", agency: agent?.agency || "", phone: agent?.phone || "",
-    email: agent?.email || "", notes: agent?.notes || "",
+    email: agent?.email || "", website: agent?.website || "", address: agent?.address || "", notes: agent?.notes || "",
   });
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
@@ -2116,7 +2383,8 @@ function AgentSheet({ agent, store, onClose, onSaved }) {
       const saved = await store.saveAgent({
         ...(agent ? { id: agent.id } : {}),
         name: f.name.trim() || null, agency: f.agency.trim() || null,
-        phone: f.phone.trim() || null, email: f.email.trim() || null, notes: f.notes,
+        phone: f.phone.trim() || null, email: f.email.trim() || null,
+        website: f.website.trim() || null, address: f.address.trim() || null, notes: f.notes,
       });
       onClose();
       onSaved && onSaved(saved);
@@ -2143,10 +2411,13 @@ function AgentSheet({ agent, store, onClose, onSaved }) {
         <button type="button" className="btn btn-primary" onClick={save} disabled={busy}>Save</button>
       </>
     }>
+      <SignaturePaste store={store} onFill={(found) => setF((x) => mergeAgent(x, found))} />
       <Field label="Name" id="a-name"><input id="a-name" className="input" value={f.name} onChange={set("name")} placeholder="e.g. Sarah Thompson" /></Field>
       <Field label="Agency" id="a-agency"><input id="a-agency" className="input" value={f.agency} onChange={set("agency")} placeholder="e.g. Harbour & Co" /></Field>
       <Field label="Phone" id="a-phone"><input id="a-phone" className="input" type="tel" value={f.phone} onChange={set("phone")} /></Field>
       <Field label="Email" id="a-email"><input id="a-email" className="input" type="email" value={f.email} onChange={set("email")} /></Field>
+      <Field label="Website" id="a-website"><input id="a-website" className="input" type="url" inputMode="url" value={f.website} onChange={set("website")} /></Field>
+      <Field label="Branch address" id="a-address"><input id="a-address" className="input" value={f.address} onChange={set("address")} /></Field>
       <Field label="Notes" id="a-notes"><textarea id="a-notes" className="textarea" rows={3} value={f.notes} onChange={set("notes")} /></Field>
     </Sheet>
   );
@@ -2250,6 +2521,18 @@ function AgentScreen({ store, id }) {
             <span className="label">Email</span>
             {a.email ? <a href={`mailto:${a.email}`}>{a.email}</a> : <span className="value">–</span>}
           </div>
+          {a.website && (
+            <div className="contact-row">
+              <span className="label">Website</span>
+              <a href={webHref(a.website)} target="_blank" rel="noopener">{hostOf(a.website)}</a>
+            </div>
+          )}
+          {a.address && (
+            <div className="contact-row">
+              <span className="label">Branch address</span>
+              <a href={`https://maps.apple.com/?q=${encodeURIComponent(a.address)}`}>{a.address}</a>
+            </div>
+          )}
           {a.notes && (
             <div className="contact-row">
               <span className="label">Notes</span>
@@ -2418,6 +2701,7 @@ function SettingsScreen({ store, session }) {
   const changed = JSON.stringify(list.map((i) => [i.id, i.label])) !== JSON.stringify(store.items.map((i) => [i.id, i.label]));
   const calendarKey = typeof store.settings.calendar_key === "string" ? store.settings.calendar_key : null;
   const feed = calendarKey ? calendarUrl(calendarKey).replace(/^https:/, "webcal:") : null;
+  const importKey = typeof store.settings.import_key === "string" ? store.settings.import_key : null;
 
   const move = (i, dir) => setList((l) => {
     const j = i + dir;
@@ -2443,9 +2727,15 @@ function SettingsScreen({ store, session }) {
     } catch (e) { toast(e.message || "Couldn't save", "error"); }
     finally { setBusy(false); }
   };
-  const copyFeed = async () => {
-    try { await navigator.clipboard.writeText(feed); toast("Link copied"); }
-    catch (e) { window.prompt("Copy this link", feed); }
+  const copy = async (text, what) => {
+    try { await navigator.clipboard.writeText(text); toast(`${what} copied`); }
+    catch (e) { window.prompt(`Copy this ${what.toLowerCase()}`, text); }
+  };
+  const copyFeed = () => copy(feed, "Link");
+  const remakeKey = async () => {
+    if (!window.confirm("Make a new key? The share button stops working on both phones until you paste the new key into the Shortcut.")) return;
+    try { await store.saveSetting("import_key", newKey()); toast("New key made — paste it into the Shortcut"); }
+    catch (e) { toast(e.message || "Couldn't save", "error"); }
   };
 
   return (
@@ -2500,6 +2790,33 @@ function SettingsScreen({ store, session }) {
               <p className="hint">Keep this link private: anyone with it can see your viewings.</p>
             </>
           ) : <p className="hint">The calendar link isn't set up yet. Run the latest schema.sql in Supabase.</p>}
+        </section>
+
+        <section className="section">
+          <h2 className="section-title">Share button setup</h2>
+          {importKey ? (
+            <>
+              <p className="hint">
+                Add listings straight from Safari's Share button. Build the Shortcut once on each phone, following{" "}
+                <a href="https://github.com/jackkianders0n-gif/house-hunt#safari-share-button" target="_blank" rel="noopener">the steps in the README</a>,
+                and paste in these two values. Shared listings appear in the Inbox on Homes.
+              </p>
+              <Field label="Function URL" id="share-url">
+                <div className="copy-row">
+                  <input id="share-url" className="input" readOnly value={importFunctionUrl()} onFocus={(e) => e.target.select()} />
+                  <button type="button" className="icon-btn" aria-label="Copy function URL" onClick={() => copy(importFunctionUrl(), "URL")}><Icon name="copy" size={20} /></button>
+                </div>
+              </Field>
+              <Field label="Import key" id="share-key">
+                <div className="copy-row">
+                  <input id="share-key" className="input" readOnly value={importKey} onFocus={(e) => e.target.select()} />
+                  <button type="button" className="icon-btn" aria-label="Copy import key" onClick={() => copy(importKey, "Key")}><Icon name="copy" size={20} /></button>
+                </div>
+              </Field>
+              <button type="button" className="btn btn-outline" onClick={remakeKey}><Icon name="refresh" size={18} stroke={2} />Make a new key</button>
+              <p className="hint">Keep the key private: anyone with it can add listings to your inbox.</p>
+            </>
+          ) : <p className="hint">The share button isn't set up yet. Run the latest schema.sql in Supabase.</p>}
         </section>
 
         <section className="section">
@@ -2586,12 +2903,14 @@ function Main({ session }) {
       screen = draft ? <ReviewScreen key={draft.id + draft.mode} store={store} initial={draft} /> : <Redirect to="import" />; break;
     case "edit": {
       const p = store.properties.find((x) => x.id === route.a);
-      screen = p ? <ReviewScreen key={"edit-" + p.id} store={store} initial={draftFromProperty(p)} />
+      screen = p ? <ReviewScreen key={"edit-" + p.id} store={store} initial={draftFromProperty(p)} focus={route.b} />
         : store.loaded ? <Redirect to="homes" /> : <p className="center-msg">Loading…</p>;
       break;
     }
     case "property":
       screen = <PropertyScreen key={route.a} store={store} id={route.a} tab={route.b} />; tab = "homes"; break;
+    case "inbox":
+      screen = <InboxScreen store={store} setDraft={setDraft} />; tab = "homes"; break;
     case "agents":
       screen = <AgentsScreen store={store} />; tab = "agents"; break;
     case "agent":

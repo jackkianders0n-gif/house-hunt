@@ -491,3 +491,34 @@ button.pill { height: 32px; padding: 0 10px 0 12px; border-radius: 16px; font-si
 .legend-best i.warn { background: #FBE3DF; }
 .shot.pdf { display: flex; align-items: center; justify-content: center; background: #FBF7F0; }
 .pdf-tile { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; font-weight: 800; color: var(--soft); }
+
+/* ---------- Inbox, ask the agent, agent details ---------- */
+.badge-wrap { position: relative; }
+.badge {
+  position: absolute; top: 4px; right: 2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center;
+}
+.inbox-card { display: flex; flex-direction: column; overflow: hidden; }
+.inbox-main {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; width: 100%;
+  border: 0; background: none; color: var(--ink); text-align: left; font: inherit; cursor: default;
+}
+button.inbox-main { cursor: pointer; }
+.inbox-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.inbox-text .addr { font-size: 15px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+.inbox-text .sub { font-size: 14px; font-weight: 800; }
+.inbox-text .state { font-size: 13px; font-weight: 600; color: var(--muted); }
+.inbox-text .state.ok { color: var(--accent); }
+.inbox-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 0 14px 6px; border-top: 1px solid var(--line-soft); }
+.inbox-actions .link-btn { min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; }
+.link-btn.danger { color: var(--danger); margin-left: auto; }
+.ask-card { display: flex; flex-direction: column; overflow: hidden; }
+.ask-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 16px 4px; }
+.ask-head .label { font-size: 15px; font-weight: 800; }
+.ask-head .hint { font-size: 12px; }
+.ask-card .option { color: var(--ink); text-decoration: none; justify-content: space-between; }
+.lookup-note { display: flex; align-items: flex-start; gap: 6px; color: var(--accent); }
+.lookup-note svg { flex: none; margin-top: 2px; }
+.paste-box { display: flex; flex-direction: column; gap: 10px; }
+.copy-row { display: flex; align-items: center; gap: 4px; }
+.copy-row .input { flex: 1; min-width: 0; color: var(--soft); }
