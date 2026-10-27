@@ -113,6 +113,26 @@ create table if not exists public.hh_settings (
   value  jsonb not null
 );
 
+-- Agent branch details (found online or pasted from an email signature)
+alter table public.hh_agents add column if not exists website text;
+alter table public.hh_agents add column if not exists address text;
+
+-- Listings shared from Safari, waiting to be checked and saved
+create table if not exists public.hh_inbox (
+  id            uuid primary key default gen_random_uuid(),
+  url           text not null,
+  status        text not null default 'processing'
+                check (status in ('processing','ready','failed','done')),
+  error         text,
+  listing       jsonb,
+  location      jsonb,
+  agent_lookup  jsonb,
+  photo_path    text,             -- inbox/… inside the hh-photos bucket
+  payload       jsonb,            -- the shared page text and data, kept for "Try again"
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
 
 -- 3. Keep updated_at current
 create or replace function public.hh_touch_updated_at()
@@ -131,6 +151,10 @@ create trigger hh_properties_touch before update on public.hh_properties
 
 drop trigger if exists hh_agents_touch on public.hh_agents;
 create trigger hh_agents_touch before update on public.hh_agents
+  for each row execute function public.hh_touch_updated_at();
+
+drop trigger if exists hh_inbox_touch on public.hh_inbox;
+create trigger hh_inbox_touch before update on public.hh_inbox
   for each row execute function public.hh_touch_updated_at();
 
 
@@ -167,9 +191,16 @@ create policy "hh members only" on public.hh_settings
   for all to authenticated
   using (public.hh_is_member()) with check (public.hh_is_member());
 
+alter table public.hh_inbox enable row level security;
+
+drop policy if exists "hh members only" on public.hh_inbox;
+create policy "hh members only" on public.hh_inbox
+  for all to authenticated
+  using (public.hh_is_member()) with check (public.hh_is_member());
+
 grant select, insert, update, delete
   on public.hh_agents, public.hh_checklist_items, public.hh_properties,
-     public.hh_offers, public.hh_settings
+     public.hh_offers, public.hh_settings, public.hh_inbox
   to authenticated;
 
 -- Live updates between the two phones
@@ -177,7 +208,7 @@ do $$
 declare t text;
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-    foreach t in array array['hh_properties','hh_agents','hh_checklist_items','hh_offers','hh_settings'] loop
+    foreach t in array array['hh_properties','hh_agents','hh_checklist_items','hh_offers','hh_settings','hh_inbox'] loop
       begin
         execute format('alter publication supabase_realtime add table public.%I', t);
       exception when duplicate_object then null;  -- already added
@@ -248,11 +279,13 @@ where not exists (select 1 from public.hh_checklist_items);
 
 
 -- Shared settings: short-lease warning at 85 years, council tax amounts
--- (fill these in from the app's Settings), and a private key for the calendar feed
+-- (fill these in from the app's Settings), and private keys for the calendar feed
+-- and for the Safari share button
 insert into public.hh_settings (key, value) values
   ('lease_warning_years', '85'::jsonb),
   ('council_tax', '{}'::jsonb),
-  ('calendar_key', to_jsonb(replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')))
+  ('calendar_key', to_jsonb(replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''))),
+  ('import_key', to_jsonb(replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')))
 on conflict (key) do nothing;
 
 
