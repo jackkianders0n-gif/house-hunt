@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.5.1";
+const APP_VERSION = "1.5.2";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -927,11 +927,9 @@ function Homes({ store, view }) {
   return (
     <div className="screen">
       <header className="page-head">
+        <p className="eyebrow">Jack and Jakey’s house hunt</p>
         <div className="head-row">
-          <div>
-            <p className="eyebrow">Jack and Jakey’s house hunt</p>
-            <h1 className="title">Homes</h1>
-          </div>
+          <h1 className="title">Homes</h1>
           <div className="head-actions">
             <a className="icon-btn" href="#/settings" aria-label="Settings"><Icon name="settings" size={22} /></a>
             <a className="icon-btn badge-wrap" href="#/inbox" aria-label={store.inbox.length ? `Inbox, ${store.inbox.length} waiting` : "Inbox"}>
@@ -2608,11 +2606,9 @@ function AgentsScreen({ store }) {
   return (
     <div className="screen">
       <header className="page-head">
+        <p className="eyebrow">Jack and Jakey’s house hunt</p>
         <div className="head-row">
-          <div>
-            <p className="eyebrow">Jack and Jakey’s house hunt</p>
-            <h1 className="title">Agents</h1>
-          </div>
+          <h1 className="title">Agents</h1>
           <button type="button" className="btn btn-primary btn-pill" onClick={() => setAdding(true)}><Icon name="plus" size={18} stroke={2.2} />Add</button>
         </div>
         {store.agents.length > 0 && (
@@ -2780,11 +2776,9 @@ function CompareScreen({ store }) {
   return (
     <div className="screen">
       <header className="page-head">
+        <p className="eyebrow">Jack and Jakey’s house hunt</p>
         <div className="head-row" style={{ alignItems: "flex-end" }}>
-          <div>
-            <p className="eyebrow">Jack and Jakey’s house hunt</p>
-            <h1 className="title">Compare</h1>
-          </div>
+          <h1 className="title">Compare</h1>
           {candidates.length > 1 && <button type="button" className="btn btn-outline btn-pill" onClick={() => setChoosing(true)}>Choose homes</button>}
         </div>
       </header>

@@ -74,6 +74,8 @@ img { display: block; }
 .head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .head-actions { display: flex; align-items: center; gap: 6px; }
 .eyebrow { font-size: 13px; font-weight: 600; color: var(--muted); }
+/* The eyebrow sits on its own full-width line above the title row */
+.page-head > .eyebrow { margin-bottom: -12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
 .bar-head {
   flex: none; display: flex; align-items: center; gap: 4px;
