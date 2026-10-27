@@ -21,6 +21,8 @@
   --warn-field: #FFF8EC;
   --danger: #A3352B;
   --shadow: 0 6px 20px rgba(23, 33, 28, 0.16);
+  /* iOS blurs a strip just below the status bar in home-screen apps; keep text clear of it */
+  --top-clear: calc(env(safe-area-inset-top) + 24px);
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -59,14 +61,14 @@ img { display: block; }
 .scroll > * { flex-shrink: 0; }
 .scroll.roomy { padding: 4px 20px 32px; gap: 18px; }
 .offline-bar {
-  flex: none; padding: calc(env(safe-area-inset-top) + 6px) 16px 6px; text-align: center;
+  flex: none; padding: calc(var(--top-clear) + 6px) 16px 6px; text-align: center;
   background: var(--warn-bg); color: var(--warn-fg); font-size: 13px; font-weight: 700;
 }
 .offline-bar + .screen .page-head, .offline-bar + .screen .bar-head { padding-top: 12px; }
 
 /* ---------- Headers ---------- */
 .page-head {
-  flex: none; padding: calc(env(safe-area-inset-top) + 20px) 20px 12px;
+  flex: none; padding: calc(var(--top-clear) + 20px) 20px 12px;
   display: flex; flex-direction: column; gap: 14px;
 }
 .head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -75,7 +77,7 @@ img { display: block; }
 .title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
 .bar-head {
   flex: none; display: flex; align-items: center; gap: 4px;
-  padding: calc(env(safe-area-inset-top) + 8px) 8px 4px;
+  padding: calc(var(--top-clear) + 8px) 8px 4px;
 }
 .bar-head h1 { font-size: 20px; font-weight: 800; flex: 1; min-width: 0; }
 .bar-head .spacer { flex: 1; }
@@ -275,14 +277,14 @@ button.pill { height: 32px; padding: 0 10px 0 12px; border-radius: 16px; font-si
 }
 .overlay-head {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
+  padding: calc(var(--top-clear) + 8px) 12px 8px;
 }
 .overlay-head h2 { font-size: 17px; font-weight: 800; }
 .overlay-head .btn-ghost { color: #fff; }
 .overlay-head .btn-primary { min-height: 40px; }
 .crop-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; }
 .crop-frame { position: relative; overflow: hidden; line-height: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
-.crop-frame img { max-width: 100%; max-height: calc(100dvh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); width: auto; height: auto; pointer-events: none; }
+.crop-frame img { max-width: 100%; max-height: calc(100dvh - 174px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); width: auto; height: auto; pointer-events: none; }
 .crop-box {
   position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
   touch-action: none; cursor: move;
