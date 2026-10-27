@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -2559,6 +2559,9 @@ function AgentScreen({ store, id }) {
 // ---------------------------------------------------------------------------
 // Compare
 // ---------------------------------------------------------------------------
+const COMPARE_MAX = 6;
+const COMPARE_FIT = 3; // more than this scroll sideways
+const NUMBER_WORDS = ["", "one", "two", "three", "four", "five", "six"];
 const shortName = (address) => {
   const parts = String(address || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (parts.length <= 1) return parts[0] || "";
@@ -2596,7 +2599,10 @@ function CompareScreen({ store }) {
     const sorted = [...present].sort((x, y) => (typeof x === "string" ? x.localeCompare(y) : x - y));
     return value === (row.best === "min" ? sorted[0] : sorted[sorted.length - 1]);
   };
-  const cols = `86px repeat(${Math.max(chosen.length, 1)}, minmax(0, 1fr))`;
+  // Up to three share the screen; past that each home gets 100px and the table scrolls sideways with the labels pinned
+  const scrolls = chosen.length > COMPARE_FIT;
+  const cols = `86px repeat(${Math.max(chosen.length, 1)}, minmax(${scrolls ? "100px" : "0"}, 1fr))`;
+  const tableWidth = scrolls ? 86 + 100 * chosen.length : undefined;
 
   return (
     <div className="screen">
@@ -2614,13 +2620,15 @@ function CompareScreen({ store }) {
           <div className="empty">
             <Icon name="compare" size={40} stroke={1.4} />
             <h2>Nothing to compare yet</h2>
-            <p>{candidates.length < 2 ? "Add at least two homes to compare them side by side." : "Choose two or three homes to compare."}</p>
+            <p>{candidates.length < 2 ? "Add at least two homes to compare them side by side." : `Choose two to ${NUMBER_WORDS[COMPARE_MAX]} homes to compare.`}</p>
           </div>
         ) : (
           <>
+            {scrolls && <p className="hint compare-hint">Swipe sideways to see all {NUMBER_WORDS[chosen.length]}.</p>}
             <section className="card compare" aria-label="Comparison">
+              <div className="compare-table" style={{ minWidth: tableWidth }}>
               <div className="compare-row head" style={{ gridTemplateColumns: cols }}>
-                <span />
+                <span className="label" />
                 {chosen.map((p) => (
                   <a key={p.id} className="compare-col" href={`#/property/${p.id}`}>
                     <Thumb url={store.photoUrl(p.photo_path)} size="100%" height={54} radius={8} />
@@ -2643,9 +2651,10 @@ function CompareScreen({ store }) {
                   </div>
                 );
               })}
+              </div>
             </section>
             <div className="legend-best">
-              <span><i aria-hidden="true" />Best of the {chosen.length === 2 ? "two" : "three"}</span>
+              <span><i aria-hidden="true" />Best of the {NUMBER_WORDS[chosen.length] || chosen.length}</span>
               <span><i aria-hidden="true" className="warn" />Short lease</span>
             </div>
           </>
@@ -2663,11 +2672,11 @@ function ChooseSheet({ candidates, selected, onClose, onSave }) {
   const [picked, setPicked] = useState(selected);
   const toggle = (id) => setPicked((x) => {
     if (x.includes(id)) return x.filter((i) => i !== id);
-    if (x.length >= 3) { toast("Pick up to three"); return x; }
+    if (x.length >= COMPARE_MAX) { toast(`Pick up to ${NUMBER_WORDS[COMPARE_MAX]}`); return x; }
     return [...x, id];
   });
   return (
-    <Sheet title="Choose up to three" onClose={onClose} footer={<button type="button" className="btn btn-primary" onClick={() => onSave(picked)}>Compare</button>}>
+    <Sheet title={`Choose up to ${NUMBER_WORDS[COMPARE_MAX]}`} onClose={onClose} footer={<button type="button" className="btn btn-primary" onClick={() => onSave(picked)}>Compare</button>}>
       <div className="card option-list">
         {candidates.map((p) => (
           <button key={p.id} type="button" className="option" aria-pressed={picked.includes(p.id)} onClick={() => toggle(p.id)}>

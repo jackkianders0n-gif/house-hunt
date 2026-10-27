@@ -407,7 +407,12 @@ button.pill { height: 32px; padding: 0 10px 0 12px; border-radius: 16px; font-si
 .mini-card .sub { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
 
 /* ---------- Compare ---------- */
-.compare { overflow: hidden; }
+.compare { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+.compare-table { width: 100%; }
+/* Labels stay put while the homes scroll sideways */
+.compare-row .label { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--line-soft); }
+.compare-row.head .label { background: #FAFBF8; align-self: stretch; }
+.compare-hint { margin: 0 4px; }
 .compare-row { display: grid; min-height: 40px; border-bottom: 1px solid var(--line-soft); }
 .compare-row:last-child { border-bottom: 0; }
 .compare-row.head { border-bottom: 1px solid var(--field); background: #FAFBF8; align-items: end; }
