@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.3.1";
+const APP_VERSION = "1.4.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -107,6 +107,17 @@ const initials = (a) => {
   const words = src.replace(/[^A-Za-z ]/g, " ").split(/\s+/).filter(Boolean);
   return ((words[0]?.[0] || "?") + (words[1]?.[0] || "")).toUpperCase();
 };
+const ratingOf = (p, userId) => {
+  const v = Number(p.ratings?.[userId]);
+  return v >= 1 && v <= 5 ? v : null;
+};
+const averageRating = (p) => {
+  const vals = Object.values(p.ratings || {}).map(Number).filter((v) => v >= 1 && v <= 5);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+};
+// Highest average first; unrated homes keep the usual order at the end
+const sortByRating = (list) =>
+  sortHomes(list).sort((a, b) => (averageRating(b) ?? -1) - (averageRating(a) ?? -1));
 const checklistScore = (p, items) => items.filter((i) => p.checklist && p.checklist[i.id] === true).length;
 const leaseLimit = (settings) => Number(settings?.lease_warning_years) || DEFAULT_LEASE_WARNING;
 const isShortLease = (p, settings) =>
@@ -327,6 +338,7 @@ const ICONS = {
   x: <path d="M6 6l12 12M18 6 6 18" />,
   trash: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4h6v3" />,
   refresh: <path d="M20 11a8 8 0 0 0-14.9-3.9M4 4v4h4M4 13a8 8 0 0 0 14.9 3.9M20 20v-4h-4" />,
+  star: <path d="m12 3.2 2.7 5.5 6 .9-4.35 4.25 1.03 6-5.38-2.83-5.38 2.83 1.03-6L3.3 9.6l6-.9z" />,
   inbox: <><path d="M3 13h5l1.5 3h5L16 13h5" /><path d="M5.5 5h13L21 13v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z" /></>,
   copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></>,
@@ -393,15 +405,23 @@ function isNetworkError(err) {
 // One pending change. Later changes to the same thing replace earlier ones.
 function queueKey(e) {
   if (e.kind === "check") return `check:${e.id}:${e.item}`;
+  if (e.kind === "rating") return `rating:${e.id}`;
   if (e.kind === "upsert") return `row:${e.table}:${e.row.id}`;
   return `${e.kind}:${e.table}:${e.id}`;
 }
 function runQueued(e) {
   if (e.kind === "update") return sb.from(e.table).update(e.patch).eq("id", e.id);
   if (e.kind === "check") return sb.rpc("hh_set_check", { p_property: e.id, p_item: e.item, p_value: e.value });
+  if (e.kind === "rating") return sb.rpc("hh_set_rating", { p_property: e.id, p_value: e.value || 0 });
   if (e.kind === "upsert") return sb.from(e.table).upsert(e.row);
   if (e.kind === "delete") return sb.from(e.table).delete().eq("id", e.id);
   return Promise.resolve({ error: null });
+}
+function withRating(ratings, userId, value) {
+  const next = { ...(ratings || {}) };
+  if (value >= 1 && value <= 5) next[userId] = value;
+  else delete next[userId];
+  return next;
 }
 // Re-apply changes still waiting to sync on top of freshly loaded data
 function overlayQueue(queue, data) {
@@ -409,13 +429,14 @@ function overlayQueue(queue, data) {
   for (const e of queue) {
     if (e.kind === "update" && e.table === "hh_properties") properties = properties.map((p) => (p.id === e.id ? { ...p, ...e.patch } : p));
     if (e.kind === "check") properties = properties.map((p) => (p.id === e.id ? { ...p, checklist: { ...(p.checklist || {}), [e.item]: e.value } } : p));
+    if (e.kind === "rating") properties = properties.map((p) => (p.id === e.id ? { ...p, ratings: withRating(p.ratings, e.user, e.value) } : p));
     if (e.kind === "upsert" && e.table === "hh_offers") offers = [...offers.filter((o) => o.id !== e.row.id), e.row];
     if (e.kind === "delete" && e.table === "hh_offers") offers = offers.filter((o) => o.id !== e.id);
   }
   return { ...data, properties, offers };
 }
 
-function useHouseHunt() {
+function useHouseHunt(me) {
   const cached = useMemo(() => loadJSON(CACHE_KEY, null), []);
   const [properties, setProperties] = useState(cached?.properties ?? []);
   const [agents, setAgents] = useState(cached?.agents ?? []);
@@ -424,6 +445,7 @@ function useHouseHunt() {
   const [settings, setSettings] = useState(cached?.settings ?? {});
   const [photos, setPhotos] = useState(cached?.photos ?? {});
   const [inbox, setInbox] = useState(cached?.inbox ?? []);
+  const [members, setMembers] = useState(cached?.members ?? []);
   const [loaded, setLoaded] = useState(!!cached);
   const [offline, setOffline] = useState(false);
   const queueRef = useRef(loadJSON(QUEUE_KEY, []));
@@ -433,8 +455,8 @@ function useHouseHunt() {
   const flushing = useRef(false);
 
   useEffect(() => {
-    if (loaded) saveJSON(CACHE_KEY, { properties, agents, items, offers, settings, photos, inbox });
-  }, [properties, agents, items, offers, settings, photos, inbox, loaded]);
+    if (loaded) saveJSON(CACHE_KEY, { properties, agents, items, offers, settings, photos, inbox, members });
+  }, [properties, agents, items, offers, settings, photos, inbox, members, loaded]);
 
   const saveQueue = () => { saveJSON(QUEUE_KEY, queueRef.current); setPending(queueRef.current.length); };
   const enqueue = (entry) => {
@@ -463,7 +485,7 @@ function useHouseHunt() {
 
   const refresh = useCallback(async () => {
     try {
-      const [p, a, i, o, s, ib] = await Promise.all([
+      const [p, a, i, o, s, ib, m] = await Promise.all([
         sb.from("hh_properties").select("*").order("created_at", { ascending: false }),
         sb.from("hh_agents").select("*").order("created_at", { ascending: true }),
         sb.from("hh_checklist_items").select("*").order("position", { ascending: true }),
@@ -471,6 +493,7 @@ function useHouseHunt() {
         sb.from("hh_settings").select("*"),
         sb.from("hh_inbox").select("id, url, status, error, listing, location, agent_lookup, photo_path, created_at, updated_at")
           .neq("status", "done").order("created_at", { ascending: false }),
+        sb.rpc("hh_member_names"),
       ]);
       const err = p.error || a.error || i.error || o.error || s.error;
       if (err) throw err;
@@ -482,6 +505,7 @@ function useHouseHunt() {
       setSettings(Object.fromEntries(s.data.map((r) => [r.key, r.value])));
       // The inbox is optional: an older database without hh_inbox still loads
       if (!ib.error) setInbox(ib.data);
+      if (!m.error && Array.isArray(m.data)) setMembers(m.data);
       setLoaded(true);
       if (!queueRef.current.length) setOffline(false);
       signPhotos(ib.error ? p.data : [...p.data, ...ib.data]);
@@ -579,6 +603,13 @@ function useHouseHunt() {
       try {
         const res = await attempt({ kind: "check", id, item, value });
         if (res.status === "saved" && res.data) setProperties((ps) => ps.map((p) => (p.id === id ? { ...p, checklist: res.data } : p)));
+      } catch (e) { /* toast shown */ }
+    },
+    async setRating(id, value) {
+      setProperties((ps) => ps.map((p) => (p.id === id ? { ...p, ratings: withRating(p.ratings, me, value) } : p)));
+      try {
+        const res = await attempt({ kind: "rating", id, user: me, value });
+        if (res.status === "saved" && res.data) setProperties((ps) => ps.map((p) => (p.id === id ? { ...p, ratings: res.data } : p)));
       } catch (e) { /* toast shown */ }
     },
     async deleteProperty(p) {
@@ -686,14 +717,14 @@ function useHouseHunt() {
         clearTimeout(timer);
       }
     },
-  }), [attempt]);
+  }), [attempt, me]);
 
   const agentById = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents]);
   const offersFor = useCallback((pid) => offers.filter((o) => o.property_id === pid)
     .sort((a, b) => (b.made_at || "").localeCompare(a.made_at || "")), [offers]);
   const photoUrl = useCallback((path) => (path && photos[path] ? photos[path].url : null), [photos]);
 
-  return { properties, agents, items, offers, settings, inbox, loaded, offline, pending, refresh, sync, agentById, offersFor, photoUrl, ...api };
+  return { me, members, properties, agents, items, offers, settings, inbox, loaded, offline, pending, refresh, sync, agentById, offersFor, photoUrl, ...api };
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +871,8 @@ function homesCentre(properties) {
 function Homes({ store, view }) {
   const [filter, setFilter] = useState(() => sessionStorage.getItem("hh-filter") || "all");
   useEffect(() => { sessionStorage.setItem("hh-filter", filter); }, [filter]);
+  const [sort, setSort] = useState(() => sessionStorage.getItem("hh-sort") || "status");
+  useEffect(() => { sessionStorage.setItem("hh-sort", sort); }, [sort]);
   useEffect(() => { sessionStorage.setItem("hh-homes-view", view); }, [view]);
 
   const { properties } = store;
@@ -847,7 +880,9 @@ function Homes({ store, view }) {
   properties.forEach((p) => { counts[p.status] = (counts[p.status] || 0) + 1; });
   const allPool = view === "map" ? properties.filter((p) => p.status !== "not_for_us") : properties;
   const active = filter !== "all" && !counts[filter] ? "all" : filter;
-  const shown = sortHomes(active === "all" ? allPool : properties.filter((p) => p.status === active));
+  const pool = active === "all" ? allPool : properties.filter((p) => p.status === active);
+  const byRating = sort === "rating" && view !== "map";
+  const shown = byRating ? sortByRating(pool) : sortHomes(pool);
   const chips = [{ key: "all", label: "All", count: allPool.length }, ...STATUSES.filter((s) => counts[s.key]).map((s) => ({ key: s.key, label: s.label, count: counts[s.key] }))];
 
   return (
@@ -855,7 +890,7 @@ function Homes({ store, view }) {
       <header className="page-head">
         <div className="head-row">
           <div>
-            <p className="eyebrow">Our house hunt</p>
+            <p className="eyebrow">Jack and Jakey’s house hunt</p>
             <h1 className="title">Homes</h1>
           </div>
           <div className="head-actions">
@@ -893,6 +928,15 @@ function Homes({ store, view }) {
               <h2>No homes yet</h2>
               <p>Tap Import to add your first flat from Rightmove screenshots or a full-page PDF.</p>
               <a className="btn btn-primary btn-pill" href="#/import"><Icon name="plus" size={18} stroke={2.2} />Import</a>
+            </div>
+          )}
+          {properties.length > 1 && (
+            <div className="sort-row">
+              <button type="button" className="link-btn" onClick={() => setSort(byRating ? "status" : "rating")}
+                aria-label={`Sorted by ${byRating ? "your ratings" : "status"}. Change sort`}>
+                <Icon name={byRating ? "star" : "down"} size={16} stroke={2.2} />
+                {byRating ? "Sorted by our rating" : "Sorted by status"}
+              </button>
             </div>
           )}
           {shown.map((p) => <PropertyCard key={p.id} p={p} store={store} />)}
@@ -939,6 +983,7 @@ function PropertyCard({ p, store }) {
           <span className="prop-address">{p.address}</span>
           <span className="prop-price">{money(p.price)}</span>
           {reduced && <span className="reduced">Reduced from {money(reduced.price)}</span>}
+          <RatingLine p={p} members={store.members} />
         </div>
       </div>
       {facts && <span className="prop-facts">{facts}</span>}
@@ -949,6 +994,70 @@ function PropertyCard({ p, store }) {
         </div>
       )}
     </a>
+  );
+}
+
+function RatingLine({ p, members }) {
+  if (!members.length || !members.some((m) => ratingOf(p, m.user_id))) return null;
+  return (
+    <span className="rating-line">
+      {members.map((m) => {
+        const v = ratingOf(p, m.user_id);
+        return (
+          <span key={m.user_id} className={v ? "" : "unrated"}>
+            {m.display_name || "?"} <span className="star-mark" aria-hidden="true">★</span>{v ?? "–"}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function Stars({ value, onChange, label }) {
+  return (
+    <span className={"stars" + (onChange ? "" : " read")} role={onChange ? "radiogroup" : "img"}
+      aria-label={onChange ? label : `${label}: ${value ? `${value} out of 5` : "not rated"}`}>
+      {[1, 2, 3, 4, 5].map((n) => {
+        const on = value != null && n <= value;
+        const star = (
+          <svg width={onChange ? 30 : 18} height={onChange ? 30 : 18} viewBox="0 0 24 24" aria-hidden="true"
+            fill={on ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+            {ICONS.star}
+          </svg>
+        );
+        if (!onChange) return <span key={n} className={"star" + (on ? " on" : "")}>{star}</span>;
+        return (
+          <button key={n} type="button" className={"star" + (on ? " on" : "")} role="radio" aria-checked={value === n}
+            aria-label={`${n} star${n === 1 ? "" : "s"}`} onClick={() => onChange(value === n ? 0 : n)}>
+            {star}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
+
+function RatingsCard({ p, store }) {
+  if (!store.members.length) return null;
+  const mine = store.members.find((m) => m.user_id === store.me);
+  const others = store.members.filter((m) => m.user_id !== store.me);
+  return (
+    <section className="card ratings-card" aria-label="Our ratings">
+      {mine && (
+        <div className="rating-row">
+          <span className="who">{mine.display_name || "You"}</span>
+          <Stars value={ratingOf(p, mine.user_id)} label="Your rating" onChange={(v) => store.setRating(p.id, v)} />
+        </div>
+      )}
+      {others.map((m) => (
+        <div key={m.user_id} className="rating-row">
+          <span className="who">{m.display_name || "Other"}</span>
+          {ratingOf(p, m.user_id) ? <Stars value={ratingOf(p, m.user_id)} label={`${m.display_name}'s rating`} />
+            : <span className="hint">Not rated yet</span>}
+        </div>
+      ))}
+      {mine && <p className="hint">Tap your stars to rate. Tap the same star again to clear it.</p>}
+    </section>
   );
 }
 
@@ -1929,6 +2038,7 @@ function PropertyScreen({ store, id, tab }) {
               </div>
               <button type="button" className="link-btn" onClick={() => setSheet("viewing")}>{p.viewing_at ? "Change" : "Add"}</button>
             </div>
+            <RatingsCard p={p} store={store} />
           </>
         )}
 
@@ -2437,7 +2547,7 @@ function AgentsScreen({ store }) {
       <header className="page-head">
         <div className="head-row">
           <div>
-            <p className="eyebrow">Our house hunt</p>
+            <p className="eyebrow">Jack and Jakey’s house hunt</p>
             <h1 className="title">Agents</h1>
           </div>
           <button type="button" className="btn btn-primary btn-pill" onClick={() => setAdding(true)}><Icon name="plus" size={18} stroke={2.2} />Add</button>
@@ -2609,7 +2719,7 @@ function CompareScreen({ store }) {
       <header className="page-head">
         <div className="head-row" style={{ alignItems: "flex-end" }}>
           <div>
-            <p className="eyebrow">Our house hunt</p>
+            <p className="eyebrow">Jack and Jakey’s house hunt</p>
             <h1 className="title">Compare</h1>
           </div>
           {candidates.length > 1 && <button type="button" className="btn btn-outline btn-pill" onClick={() => setChoosing(true)}>Choose homes</button>}
@@ -2859,7 +2969,7 @@ function SignIn() {
   return (
     <form className="signin" onSubmit={submit}>
       <div>
-        <p className="eyebrow">Our house hunt</p>
+        <p className="eyebrow">Jack and Jakey’s house hunt</p>
         <h1>Sign in</h1>
       </div>
       <p className="hint">Use the same login as the gym tracker.</p>
@@ -2872,7 +2982,7 @@ function SignIn() {
 }
 
 function Main({ session }) {
-  const store = useHouseHunt();
+  const store = useHouseHunt(session.user.id);
   const route = useRoute();
   const [draft, setDraft] = useState(null);
   const memberKey = "hh-member-" + session.user.id;

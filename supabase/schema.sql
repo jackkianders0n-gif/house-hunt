@@ -92,6 +92,8 @@ create index if not exists hh_properties_agent_idx on public.hh_properties(agent
 -- (for anyone who ran an earlier version of this file)
 alter table public.hh_properties add column if not exists listing_status text;
 alter table public.hh_properties add column if not exists price_history jsonb not null default '[]'::jsonb;
+-- Each of your ratings, 1 to 5 stars: { "<user id>": 4 }
+alter table public.hh_properties add column if not exists ratings jsonb not null default '{}'::jsonb;
 
 create table if not exists public.hh_offers (
   id              uuid primary key default gen_random_uuid(),
@@ -231,6 +233,37 @@ as $$
 $$;
 grant execute on function public.hh_set_check(uuid, uuid, boolean) to authenticated;
 
+-- Set your own star rating (1–5, or 0 to clear) without touching the other person's
+create or replace function public.hh_set_rating(p_property uuid, p_value integer)
+returns jsonb
+language sql
+security invoker
+set search_path = public
+as $$
+  update public.hh_properties
+     set ratings = case when p_value between 1 and 5
+                        then jsonb_set(ratings, array[auth.uid()::text], to_jsonb(p_value), true)
+                        else ratings - auth.uid()::text end
+   where id = p_property
+  returning ratings;
+$$;
+grant execute on function public.hh_set_rating(uuid, integer) to authenticated;
+
+-- Your two names, so the app can label each rating (members only)
+create or replace function public.hh_member_names()
+returns table (user_id uuid, display_name text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.user_id, m.display_name from public.hh_members m
+   where public.hh_is_member()
+   order by m.display_name;
+$$;
+revoke all on function public.hh_member_names() from public;
+grant execute on function public.hh_member_names() to authenticated;
+
 
 -- 5. Photo storage (private bucket, members only)
 insert into storage.buckets (id, name, public)
@@ -296,7 +329,7 @@ select id, 'Jack' from auth.users where email = 'YOUR-EMAIL@example.com'
 on conflict (user_id) do nothing;
 
 insert into public.hh_members (user_id, display_name)
-select id, 'Partner' from auth.users where email = 'HIS-EMAIL@example.com'
+select id, 'Jakey' from auth.users where email = 'HIS-EMAIL@example.com'
 on conflict (user_id) do nothing;
 
 -- Check: this should list both of you

@@ -527,3 +527,19 @@ button.inbox-main { cursor: pointer; }
 .paste-box { display: flex; flex-direction: column; gap: 10px; }
 .copy-row { display: flex; align-items: center; gap: 4px; }
 .copy-row .input { flex: 1; min-width: 0; color: var(--soft); }
+
+/* ---------- Ratings ---------- */
+.rating-line { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; font-weight: 700; color: var(--soft); }
+.rating-line .star-mark { color: #B7791F; }
+.rating-line .unrated { color: var(--muted); font-weight: 600; }
+.ratings-card { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px 12px; }
+.rating-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+.rating-row .who { font-size: 15px; font-weight: 800; }
+.stars { display: inline-flex; align-items: center; color: #B7791F; }
+.stars .star { display: inline-flex; align-items: center; justify-content: center; color: #C9CFC8; }
+.stars .star.on { color: #B7791F; }
+.stars button.star { width: 40px; height: 44px; border: 0; background: none; padding: 0; cursor: pointer; }
+.stars.read { gap: 2px; }
+.ratings-card .hint { margin: 0; font-size: 12px; }
+.sort-row { display: flex; justify-content: flex-end; margin: -4px 0 -6px; }
+.sort-row .link-btn { display: inline-flex; align-items: center; gap: 4px; min-height: 36px; }
