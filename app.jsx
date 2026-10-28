@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.5.3";
+const APP_VERSION = "1.6.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -64,6 +64,14 @@ const ASK_FIELDS = [
   { key: "council_tax", question: "What council tax band is it?" },
 ];
 const INBOX_STALE_MS = 5 * 60 * 1000;
+const CALL_OUTCOMES = [
+  { key: "booked", label: "Viewing booked", short: "Viewing booked" },
+  { key: "voicemail", label: "Left a voicemail", short: "Voicemail" },
+  { key: "no_answer", label: "No answer", short: "No answer" },
+  { key: "spoke", label: "Spoke — no viewing yet", short: "Spoke" },
+];
+const CALL_OUTCOME = Object.fromEntries(CALL_OUTCOMES.map((o) => [o.key, o]));
+const PENDING_CALL_KEY = "hh-pending-call";
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -79,6 +87,17 @@ const pad = (n) => String(n).padStart(2, "0");
 const fmtViewing = (iso) => {
   const d = new Date(iso);
   return `${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+// "today 14:05", "yesterday 09:30", "Mon 26 Oct 14:05"
+const fmtWhen = (iso) => {
+  const d = new Date(iso);
+  const day = new Date(d); day.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - day) / 86400000);
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (diff === 0) return `today ${time}`;
+  if (diff === 1) return `yesterday ${time}`;
+  return `${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} ${time}`;
 };
 const fmtDay = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 const dateInput = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -404,7 +423,7 @@ const QUEUE_KEY = "hh-queue-v1";
 const loadJSON = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch (e) { return fallback; } };
 const saveJSON = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage full */ } };
 const SIGN_SECONDS = 7 * 24 * 3600;
-const LIVE_TABLES = ["hh_properties", "hh_agents", "hh_checklist_items", "hh_offers", "hh_settings", "hh_inbox"];
+const LIVE_TABLES = ["hh_properties", "hh_agents", "hh_checklist_items", "hh_offers", "hh_settings", "hh_inbox", "hh_calls"];
 
 const IMPORT_TIMEOUT_MS = 110 * 1000;
 
@@ -440,6 +459,7 @@ function runQueued(e) {
   if (e.kind === "delete") return sb.from(e.table).delete().eq("id", e.id);
   return Promise.resolve({ error: null });
 }
+const sortCalls = (calls) => [...calls].sort((a, b) => (b.called_at || "").localeCompare(a.called_at || ""));
 function withRating(ratings, userId, value) {
   const next = { ...(ratings || {}) };
   if (value >= 1 && value <= 5) next[userId] = value;
@@ -449,14 +469,17 @@ function withRating(ratings, userId, value) {
 // Re-apply changes still waiting to sync on top of freshly loaded data
 function overlayQueue(queue, data) {
   let { properties, offers } = data;
+  let calls = data.calls || [];
   for (const e of queue) {
     if (e.kind === "update" && e.table === "hh_properties") properties = properties.map((p) => (p.id === e.id ? { ...p, ...e.patch } : p));
     if (e.kind === "check") properties = properties.map((p) => (p.id === e.id ? { ...p, checklist: { ...(p.checklist || {}), [e.item]: e.value } } : p));
     if (e.kind === "rating") properties = properties.map((p) => (p.id === e.id ? { ...p, ratings: withRating(p.ratings, e.user, e.value) } : p));
     if (e.kind === "upsert" && e.table === "hh_offers") offers = [...offers.filter((o) => o.id !== e.row.id), e.row];
     if (e.kind === "delete" && e.table === "hh_offers") offers = offers.filter((o) => o.id !== e.id);
+    if (e.kind === "upsert" && e.table === "hh_calls") calls = [...calls.filter((c) => c.id !== e.row.id), e.row];
+    if (e.kind === "delete" && e.table === "hh_calls") calls = calls.filter((c) => c.id !== e.id);
   }
-  return { ...data, properties, offers };
+  return { ...data, properties, offers, calls: sortCalls(calls) };
 }
 
 function useHouseHunt(me) {
@@ -469,6 +492,8 @@ function useHouseHunt(me) {
   const [photos, setPhotos] = useState(cached?.photos ?? {});
   const [inbox, setInbox] = useState(cached?.inbox ?? []);
   const [members, setMembers] = useState(cached?.members ?? []);
+  const [calls, setCalls] = useState(cached?.calls ?? []);
+  const [pendingCall, setPendingCall] = useState(() => loadJSON(PENDING_CALL_KEY, null));
   const [loaded, setLoaded] = useState(!!cached);
   const [offline, setOffline] = useState(false);
   const queueRef = useRef(loadJSON(QUEUE_KEY, []));
@@ -478,8 +503,8 @@ function useHouseHunt(me) {
   const flushing = useRef(false);
 
   useEffect(() => {
-    if (loaded) saveJSON(CACHE_KEY, { properties, agents, items, offers, settings, photos, inbox, members });
-  }, [properties, agents, items, offers, settings, photos, inbox, members, loaded]);
+    if (loaded) saveJSON(CACHE_KEY, { properties, agents, items, offers, settings, photos, inbox, members, calls });
+  }, [properties, agents, items, offers, settings, photos, inbox, members, calls, loaded]);
 
   const saveQueue = () => { saveJSON(QUEUE_KEY, queueRef.current); setPending(queueRef.current.length); };
   const enqueue = (entry) => {
@@ -508,7 +533,7 @@ function useHouseHunt(me) {
 
   const refresh = useCallback(async () => {
     try {
-      const [p, a, i, o, s, ib, m] = await Promise.all([
+      const [p, a, i, o, s, ib, m, c] = await Promise.all([
         sb.from("hh_properties").select("*").order("created_at", { ascending: false }),
         sb.from("hh_agents").select("*").order("created_at", { ascending: true }),
         sb.from("hh_checklist_items").select("*").order("position", { ascending: true }),
@@ -517,12 +542,15 @@ function useHouseHunt(me) {
         sb.from("hh_inbox").select("id, url, status, error, listing, location, agent_lookup, photo_path, created_at, updated_at")
           .neq("status", "done").order("created_at", { ascending: false }),
         sb.rpc("hh_member_names"),
+        sb.from("hh_calls").select("*").order("called_at", { ascending: false }),
       ]);
       const err = p.error || a.error || i.error || o.error || s.error;
       if (err) throw err;
-      const data = overlayQueue(queueRef.current, { properties: p.data, offers: o.data });
+      // Calls are optional too, until the hh_calls SQL has been run
+      const data = overlayQueue(queueRef.current, { properties: p.data, offers: o.data, calls: c.error ? null : c.data });
       setProperties(data.properties);
       setOffers(data.offers);
+      if (!c.error) setCalls(data.calls);
       setAgents(a.data);
       setItems(i.data);
       setSettings(Object.fromEntries(s.data.map((r) => [r.key, r.value])));
@@ -646,6 +674,24 @@ function useHouseHunt(me) {
       setOffers((os) => [...os.filter((o) => o.id !== row.id), row]);
       return (await attempt({ kind: "upsert", table: "hh_offers", row })).status;
     },
+    async saveCall(row) {
+      setCalls((cs) => sortCalls([...cs.filter((c) => c.id !== row.id), row]));
+      return (await attempt({ kind: "upsert", table: "hh_calls", row })).status;
+    },
+    async deleteCall(id) {
+      setCalls((cs) => cs.filter((c) => c.id !== id));
+      return (await attempt({ kind: "delete", table: "hh_calls", id })).status;
+    },
+    // Tapping Call: remember it, so "How did it go?" is waiting when you come back
+    startCall(agentId, propertyId) {
+      const pending = { agentId: agentId || null, propertyId: propertyId || null, at: new Date().toISOString() };
+      saveJSON(PENDING_CALL_KEY, pending);
+      setPendingCall(pending);
+    },
+    clearPendingCall() {
+      localStorage.removeItem(PENDING_CALL_KEY);
+      setPendingCall(null);
+    },
     async deleteOffer(id) {
       setOffers((os) => os.filter((o) => o.id !== id));
       return (await attempt({ kind: "delete", table: "hh_offers", id })).status;
@@ -746,8 +792,12 @@ function useHouseHunt(me) {
   const offersFor = useCallback((pid) => offers.filter((o) => o.property_id === pid)
     .sort((a, b) => (b.made_at || "").localeCompare(a.made_at || "")), [offers]);
   const photoUrl = useCallback((path) => (path && photos[path] ? photos[path].url : null), [photos]);
+  const lastCallFor = useCallback((pid) => calls.find((c) => c.property_id === pid) || null, [calls]);
+  const lastCallToAgent = useCallback((aid) => calls.find((c) => c.agent_id === aid) || null, [calls]);
+  const memberName = useCallback((uid) => (uid === me ? (members.find((m) => m.user_id === uid)?.display_name || "You")
+    : members.find((m) => m.user_id === uid)?.display_name || ""), [members, me]);
 
-  return { me, members, properties, agents, items, offers, settings, inbox, loaded, offline, pending, refresh, sync, agentById, offersFor, photoUrl, ...api };
+  return { me, members, calls, pendingCall, lastCallFor, lastCallToAgent, memberName, properties, agents, items, offers, settings, inbox, loaded, offline, pending, refresh, sync, agentById, offersFor, photoUrl, ...api };
 }
 
 // ---------------------------------------------------------------------------
@@ -865,7 +915,7 @@ function TabBar({ active }) {
   return (
     <nav className="tabbar" aria-label="Main">
       {tab("homes", homesHref, "home", "Homes")}
-      {tab("agents", "#/agents", "users", "Agents")}
+      {tab("agents", sessionStorage.getItem("hh-agents-view") === "calls" ? "#/calls" : "#/agents", "users", "Agents")}
       {tab("compare", "#/compare", "compare", "Compare")}
     </nav>
   );
@@ -913,7 +963,8 @@ function Homes({ store, view }) {
   const { properties } = store;
   const counts = {};
   properties.forEach((p) => { counts[p.status] = (counts[p.status] || 0) + 1; });
-  const allPool = view === "map" ? properties.filter((p) => p.status !== "not_for_us") : properties;
+  // "Not for us" homes only show when you tap their chip
+  const allPool = properties.filter((p) => p.status !== "not_for_us");
   const active = filter !== "all" && !counts[filter] ? "all" : filter;
   const pool = active === "all" ? allPool : properties.filter((p) => p.status === active);
   const sort = SORT[sortKey];
@@ -1057,6 +1108,206 @@ function PropertyCard({ p, store, tag }) {
         </div>
       )}
     </a>
+  );
+}
+
+function CallStatus({ call, store, prefix = "", empty = "Not called yet" }) {
+  if (!call) return <span className="call-status none">{empty}</span>;
+  const who = store.memberName(call.created_by);
+  return (
+    <span className={"call-status " + call.outcome}>
+      {prefix}{[CALL_OUTCOME[call.outcome]?.short || call.outcome, who, fmtWhen(call.called_at)].filter(Boolean).join(" · ")}
+    </span>
+  );
+}
+
+function AgentsNav({ current }) {
+  useEffect(() => { sessionStorage.setItem("hh-agents-view", current); }, [current]);
+  return (
+    <nav className="segmented" aria-label="Agents view">
+      <a href="#/calls" aria-current={current === "calls" ? "page" : undefined}>Call list</a>
+      <a href="#/agents" aria-current={current === "agents" ? "page" : undefined}>Agents</a>
+    </nav>
+  );
+}
+
+// Your call sheet: every flat still to book, ranked by how you both rated it
+function CallListScreen({ store }) {
+  const [mode, setMode] = useState(() => sessionStorage.getItem("hh-calls-mode") || "tobook");
+  useEffect(() => { sessionStorage.setItem("hh-calls-mode", mode); }, [mode]);
+  const [logging, setLogging] = useState(null);
+  const active = store.properties.filter((p) => p.status !== "not_for_us");
+  const toBook = active.filter((p) => p.status === "shortlisted" && !p.viewing_at);
+  const list = sortHomesBy(mode === "tobook" ? toBook : active, SORT.rating, false, store.settings);
+  return (
+    <div className="screen">
+      <header className="page-head">
+        <p className="eyebrow">Jack and Jakey’s house hunt</p>
+        <div className="head-row">
+          <h1 className="title">Call list</h1>
+        </div>
+        <AgentsNav current="calls" />
+        <div className="chips">
+          <button type="button" className="chip" aria-pressed={mode === "tobook"} onClick={() => setMode("tobook")}>To book {toBook.length}</button>
+          <button type="button" className="chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {active.length}</button>
+        </div>
+      </header>
+      <main className="scroll">
+        {store.loaded && list.length === 0 && (
+          <div className="empty">
+            <Icon name="phone" size={40} stroke={1.4} />
+            <h2>{mode === "tobook" ? "Nothing left to book" : "No homes yet"}</h2>
+            <p>{mode === "tobook" ? "Every shortlisted flat has a viewing booked. Tap All to see them." : "Import a listing to start your call list."}</p>
+          </div>
+        )}
+        {list.map((p, i) => {
+          const agent = store.agentById[p.agent_id];
+          return (
+            <div key={p.id} className="card call-row">
+              <div className="call-top">
+                <span className="call-rank" aria-hidden="true">{i + 1}</span>
+                <a className="call-main" href={`#/property/${p.id}`}>
+                  <span className="addr">{p.address}</span>
+                  <span className="price">{money(p.price)}</span>
+                  <RatingLine p={p} members={store.members} />
+                  <span className="agent">
+                    {agent ? [agentTitle(agent), agent.phone].filter(Boolean).join(" · ") : "No agent yet"}
+                  </span>
+                </a>
+                {agent?.phone && (
+                  <a className="round-btn" href={telHref(agent.phone)} aria-label={`Call ${agentTitle(agent)} about ${p.address}`}
+                    onClick={() => store.startCall(agent.id, p.id)}>
+                    <Icon name="phone" size={22} />
+                  </a>
+                )}
+              </div>
+              <div className="call-foot">
+                {p.viewing_at
+                  ? <span className="call-status booked">Viewing {fmtViewing(p.viewing_at)}</span>
+                  : <CallStatus call={store.lastCallFor(p.id)} store={store} />}
+                {agent
+                  ? <button type="button" className="link-btn" onClick={() => setLogging(p)}>Log a call</button>
+                  : <a className="link-btn" href={`#/edit/${p.id}/agent`}>Add agent</a>}
+              </div>
+            </div>
+          );
+        })}
+      </main>
+      {logging && <CallSheet store={store} propertyId={logging.id} agentId={logging.agent_id} onClose={() => setLogging(null)} />}
+    </div>
+  );
+}
+
+// "How did it go?" after tapping Call, or "Log a call" for one you've already made
+function CallSheet({ store, pending, propertyId: givenProperty, agentId: givenAgent, onClose }) {
+  const agentId = pending ? pending.agentId : givenAgent;
+  const propertyId = pending ? pending.propertyId : givenProperty;
+  const agent = store.agentById[agentId];
+  const primary = store.properties.find((x) => x.id === propertyId);
+  const others = agent ? sortHomes(store.properties.filter((x) => x.agent_id === agent.id && x.status !== "not_for_us" && x.id !== propertyId)) : [];
+  const flats = [primary, ...others].filter(Boolean);
+  const start = pending ? new Date(pending.at) : new Date();
+  const [picked, setPicked] = useState(() => (primary ? [primary.id] : flats.length === 1 ? [flats[0].id] : []));
+  const [outcome, setOutcome] = useState(null);
+  const [date, setDate] = useState(dateInput(start));
+  const [time, setTime] = useState(timeInput(start));
+  const [note, setNote] = useState("");
+  const [viewings, setViewings] = useState(() => Object.fromEntries(flats.map((x) => {
+    const v = x.viewing_at ? new Date(x.viewing_at) : null;
+    return [x.id, { date: v ? dateInput(v) : "", time: v ? timeInput(v) : "" }];
+  })));
+  const [busy, setBusy] = useState(false);
+  const toggle = (id) => setPicked((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
+  const setViewing = (id, k, v) => setViewings((vs) => ({ ...vs, [id]: { ...vs[id], [k]: v } }));
+
+  async function save() {
+    if (!picked.length) { toast("Tick which flat the call was about", "error"); return; }
+    if (!outcome) { toast("Choose how the call went", "error"); return; }
+    setBusy(true);
+    try {
+      const calledAt = new Date(`${date}T${time || "12:00"}`).toISOString();
+      let queued = false;
+      for (const id of picked) {
+        const home = store.properties.find((x) => x.id === id);
+        const status = await store.saveCall({
+          id: uuid(), property_id: id, agent_id: agentId || home?.agent_id || null,
+          called_at: calledAt, outcome, note: note.trim(), created_by: store.me,
+        });
+        if (status === "queued") queued = true;
+        const v = viewings[id];
+        if (outcome === "booked" && v?.date && home) {
+          const patch = { viewing_at: new Date(`${v.date}T${v.time || "12:00"}`).toISOString() };
+          if (home.status === "shortlisted") patch.status = "viewing_booked";
+          await store.patchProperty(id, patch);
+        }
+      }
+      toast(queued ? "Saved on this phone — it'll sync when you're back online" : picked.length > 1 ? `Logged for ${picked.length} flats` : "Call logged");
+      onClose();
+    } catch (e) {
+      toast(e.message || "Couldn't save", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet title={pending ? "How did the call go?" : "Log a call"} onClose={onClose}
+      footer={<button type="button" className="btn btn-primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</button>}>
+      {agent && <p className="hint" style={{ marginTop: -6 }}>{agentLabel(agent)}{agent.phone ? ` · ${agent.phone}` : ""}</p>}
+      {flats.length > 1 && (
+        <div className="field">
+          <label>Which flats was it about?</label>
+          <div className="card option-list">
+            {flats.map((x) => (
+              <button key={x.id} type="button" className="option" aria-pressed={picked.includes(x.id)} onClick={() => toggle(x.id)}>
+                <span className="check-box" style={picked.includes(x.id) ? { background: "#1E6A50", borderColor: "#1E6A50" } : undefined}>
+                  {picked.includes(x.id) && <Icon name="check" size={16} stroke={3} />}
+                </span>
+                <span className="offer-main">
+                  <span>{x.address}</span>
+                  <span className="hint" style={{ fontSize: 12 }}>{money(x.price)} · {STATUS[x.status].label}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {flats.length === 1 && <p className="call-flat">{flats[0].address}</p>}
+      {flats.length === 0 && <p className="hint">This agent has no flats in the app yet.</p>}
+      <div className="field">
+        <label>How did it go?</label>
+        <div className="card option-list">
+          {CALL_OUTCOMES.map((o) => (
+            <button key={o.key} type="button" className="option" aria-pressed={outcome === o.key} onClick={() => setOutcome(o.key)}>
+              <span>{o.label}</span>
+              {outcome === o.key && <span className="tick"><Icon name="check" size={20} stroke={2.6} /></span>}
+            </button>
+          ))}
+        </div>
+      </div>
+      {outcome === "booked" && picked.map((id) => {
+        const x = flats.find((f) => f.id === id);
+        if (!x) return null;
+        return (
+          <div key={id} className="grid2">
+            <Field label={picked.length > 1 ? `Viewing: ${shortName(x.address)}` : "Viewing date"} id={"vd-" + id}>
+              <input id={"vd-" + id} className="input" type="date" value={viewings[id]?.date || ""} onChange={(e) => setViewing(id, "date", e.target.value)} />
+            </Field>
+            <Field label="Time" id={"vt-" + id}>
+              <input id={"vt-" + id} className="input" type="time" value={viewings[id]?.time || ""} onChange={(e) => setViewing(id, "time", e.target.value)} />
+            </Field>
+          </div>
+        );
+      })}
+      <div className="grid2">
+        <Field label="Called on" id="call-date"><input id="call-date" className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <Field label="At" id="call-time"><input id="call-time" className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} /></Field>
+      </div>
+      <Field label="Note" id="call-note">
+        <input id="call-note" className="input" value={note} placeholder="Optional, e.g. call back after 3" onChange={(e) => setNote(e.target.value)} />
+      </Field>
+      {pending && <p className="hint">Didn't make the call? Close this and nothing is logged.</p>}
+    </Sheet>
   );
 }
 
@@ -2258,6 +2509,7 @@ function OfferSheet({ p, offer, store, onClose }) {
 }
 
 function DetailsTab({ p, agent, store, onOffer }) {
+  const [loggingCall, setLoggingCall] = useState(false);
   const short = isShortLease(p, store.settings);
   const costs = runningCosts(p, store.settings);
   const offers = store.offersFor(p.id);
@@ -2346,7 +2598,8 @@ function DetailsTab({ p, agent, store, onOffer }) {
             <a className={"round-btn outline" + (agent.email ? "" : " disabled")} href={agent.email ? `mailto:${agent.email}` : undefined} aria-label={`Email ${agentTitle(agent)}`}>
               <Icon name="mail" size={22} />
             </a>
-            <a className={"round-btn" + (agent.phone ? "" : " disabled")} href={agent.phone ? telHref(agent.phone) : undefined} aria-label={`Call ${agentTitle(agent)}`}>
+            <a className={"round-btn" + (agent.phone ? "" : " disabled")} href={agent.phone ? telHref(agent.phone) : undefined} aria-label={`Call ${agentTitle(agent)}`}
+              onClick={() => store.startCall(agent.id, p.id)}>
               <Icon name="phone" size={22} />
             </a>
           </div>
@@ -2357,6 +2610,12 @@ function DetailsTab({ p, agent, store, onOffer }) {
           </a>
         )}
       </section>
+
+      <div className="call-under">
+        <CallStatus call={store.lastCallFor(p.id)} store={store} prefix="Last call: " empty="No calls logged yet" />
+        <button type="button" className="link-btn" onClick={() => setLoggingCall(true)}>Log a call</button>
+      </div>
+      {loggingCall && <CallSheet store={store} propertyId={p.id} agentId={p.agent_id} onClose={() => setLoggingCall(false)} />}
 
       <a className="btn btn-outline" href={`#/import/${p.id}`}>
         <Icon name="refresh" size={18} stroke={2} />Update from Rightmove
@@ -2613,6 +2872,7 @@ function AgentsScreen({ store }) {
           <h1 className="title">Agents</h1>
           <button type="button" className="btn btn-primary btn-pill" onClick={() => setAdding(true)}><Icon name="plus" size={18} stroke={2.2} />Add</button>
         </div>
+        <AgentsNav current="agents" />
         {store.agents.length > 0 && (
           <div className="search">
             <Icon name="search" size={20} stroke={2} />
@@ -2637,9 +2897,11 @@ function AgentsScreen({ store }) {
                 <span className="name">{agentTitle(a)}</span>
                 {a.name && a.agency && <span className="sub">{a.agency}</span>}
                 <span className="count">{counts[a.id] ? `${counts[a.id]} ${counts[a.id] === 1 ? "property" : "properties"}` : "No properties"}</span>
+                <CallStatus call={store.lastCallToAgent(a.id)} store={store} />
               </span>
             </a>
-            <a className={"round-btn" + (a.phone ? "" : " disabled")} href={a.phone ? telHref(a.phone) : undefined} aria-label={`Call ${agentTitle(a)}`}>
+            <a className={"round-btn" + (a.phone ? "" : " disabled")} href={a.phone ? telHref(a.phone) : undefined} aria-label={`Call ${agentTitle(a)}`}
+              onClick={() => store.startCall(a.id, null)}>
               <Icon name="phone" size={22} />
             </a>
           </div>
@@ -2653,6 +2915,7 @@ function AgentsScreen({ store }) {
 function AgentScreen({ store, id }) {
   const a = store.agentById[id];
   const [editing, setEditing] = useState(false);
+  const [logging, setLogging] = useState(false);
   if (!a) {
     return (
       <div className="screen">
@@ -2662,6 +2925,7 @@ function AgentScreen({ store, id }) {
     );
   }
   const homes = sortHomes(store.properties.filter((p) => p.agent_id === a.id));
+  const agentCalls = store.calls.filter((c) => c.agent_id === a.id);
   return (
     <div className="screen">
       <BackBar to="agents">
@@ -2675,7 +2939,7 @@ function AgentScreen({ store, id }) {
         </div>
         <div className="grid2">
           <a className="btn btn-primary btn-block" href={a.phone ? telHref(a.phone) : undefined}
-            style={a.phone ? undefined : { opacity: 0.45, pointerEvents: "none" }}>
+            style={a.phone ? undefined : { opacity: 0.45, pointerEvents: "none" }} onClick={() => store.startCall(a.id, null)}>
             <Icon name="phone" size={20} stroke={2} />Call
           </a>
           <a className="btn btn-outline btn-block" href={a.email ? `mailto:${a.email}` : undefined}
@@ -2721,8 +2985,34 @@ function AgentScreen({ store, id }) {
           ))}
           {homes.length === 0 && <p className="hint">No homes linked to this agent yet.</p>}
         </section>
+        <section className="section" style={{ gap: 10 }}>
+          <div className="section-head">
+            <h2 className="section-title">Calls ({agentCalls.length})</h2>
+            <button type="button" className="link-btn" onClick={() => setLogging(true)}>Log a call</button>
+          </div>
+          {agentCalls.length > 0 ? (
+            <div className="card option-list">
+              {agentCalls.map((c) => {
+                const home = store.properties.find((x) => x.id === c.property_id);
+                return (
+                  <button key={c.id} type="button" className="option call-log-row" onClick={() => {
+                    if (window.confirm("Delete this call from the log?")) store.deleteCall(c.id).catch(() => {});
+                  }}>
+                    <span className="offer-main">
+                      <span className="call-log-title">{CALL_OUTCOME[c.outcome]?.short || c.outcome} · {home ? shortName(home.address) : "a home"}</span>
+                      <span className="hint" style={{ fontSize: 12 }}>{[store.memberName(c.created_by), fmtWhen(c.called_at)].filter(Boolean).join(" · ")}</span>
+                      {c.note && <span className="hint" style={{ fontSize: 12 }}>{c.note}</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : <p className="hint">No calls logged yet.</p>}
+          {agentCalls.length > 0 && <p className="hint">Tap a call to delete it.</p>}
+        </section>
       </main>
       {editing && <AgentSheet agent={a} store={store} onClose={() => setEditing(false)} />}
+      {logging && <CallSheet store={store} agentId={a.id} onClose={() => setLogging(false)} />}
     </div>
   );
 }
@@ -3091,6 +3381,8 @@ function Main({ session }) {
       screen = <InboxScreen store={store} setDraft={setDraft} />; tab = "homes"; break;
     case "agents":
       screen = <AgentsScreen store={store} />; tab = "agents"; break;
+    case "calls":
+      screen = <CallListScreen store={store} />; tab = "agents"; break;
     case "agent":
       screen = <AgentScreen key={route.a} store={store} id={route.a} />; tab = "agents"; break;
     case "compare":
@@ -3106,6 +3398,7 @@ function Main({ session }) {
       <SyncBar store={store} />
       {screen}
       {tab && <TabBar active={tab} />}
+      {store.pendingCall && <CallSheet key={store.pendingCall.at} store={store} pending={store.pendingCall} onClose={store.clearPendingCall} />}
       <Toasts />
     </div>
   );

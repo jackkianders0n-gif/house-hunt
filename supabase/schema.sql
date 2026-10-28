@@ -119,6 +119,20 @@ create table if not exists public.hh_settings (
 alter table public.hh_agents add column if not exists website text;
 alter table public.hh_agents add column if not exists address text;
 
+-- Calls to agents about a flat (booking viewings), by either of you
+create table if not exists public.hh_calls (
+  id           uuid primary key default gen_random_uuid(),
+  property_id  uuid not null references public.hh_properties(id) on delete cascade,
+  agent_id     uuid references public.hh_agents(id) on delete set null,
+  called_at    timestamptz not null default now(),
+  outcome      text not null check (outcome in ('booked','voicemail','no_answer','spoke')),
+  note         text not null default '',
+  created_by   uuid default auth.uid(),
+  created_at   timestamptz not null default now()
+);
+create index if not exists hh_calls_property_idx on public.hh_calls(property_id);
+create index if not exists hh_calls_agent_idx on public.hh_calls(agent_id);
+
 -- Listings shared from Safari, waiting to be checked and saved
 create table if not exists public.hh_inbox (
   id            uuid primary key default gen_random_uuid(),
@@ -194,6 +208,12 @@ create policy "hh members only" on public.hh_settings
   using (public.hh_is_member()) with check (public.hh_is_member());
 
 alter table public.hh_inbox enable row level security;
+alter table public.hh_calls enable row level security;
+
+drop policy if exists "hh members only" on public.hh_calls;
+create policy "hh members only" on public.hh_calls
+  for all to authenticated
+  using (public.hh_is_member()) with check (public.hh_is_member());
 
 drop policy if exists "hh members only" on public.hh_inbox;
 create policy "hh members only" on public.hh_inbox
@@ -202,7 +222,7 @@ create policy "hh members only" on public.hh_inbox
 
 grant select, insert, update, delete
   on public.hh_agents, public.hh_checklist_items, public.hh_properties,
-     public.hh_offers, public.hh_settings, public.hh_inbox
+     public.hh_offers, public.hh_settings, public.hh_inbox, public.hh_calls
   to authenticated;
 
 -- Live updates between the two phones
@@ -210,7 +230,7 @@ do $$
 declare t text;
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-    foreach t in array array['hh_properties','hh_agents','hh_checklist_items','hh_offers','hh_settings','hh_inbox'] loop
+    foreach t in array array['hh_properties','hh_agents','hh_checklist_items','hh_offers','hh_settings','hh_inbox','hh_calls'] loop
       begin
         execute format('alter publication supabase_realtime add table public.%I', t);
       exception when duplicate_object then null;  -- already added

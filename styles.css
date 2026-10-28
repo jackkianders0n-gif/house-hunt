@@ -555,3 +555,29 @@ button.inbox-main { cursor: pointer; }
   display: inline-block; padding: 3px 8px; border-radius: 8px; background: var(--accent-tint); color: #123F2F;
   font-size: 12px; font-weight: 800;
 }
+
+/* ---------- Calls ---------- */
+.call-row { display: flex; flex-direction: column; padding: 12px 14px 4px; }
+.call-top { display: flex; align-items: center; gap: 10px; }
+.call-rank {
+  flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--track); color: var(--soft);
+  display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; align-self: flex-start;
+}
+.call-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; color: var(--ink); text-decoration: none; }
+.call-main .addr { font-size: 15px; font-weight: 700; line-height: 1.3; }
+.call-main .price { font-size: 15px; font-weight: 800; }
+.call-main .agent { font-size: 13px; font-weight: 600; color: var(--soft); overflow-wrap: anywhere; }
+.call-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 8px; border-top: 1px solid var(--line-soft); min-height: 44px;
+}
+.call-foot .link-btn { flex: none; text-decoration: none; }
+.call-status { font-size: 13px; font-weight: 700; color: var(--soft); }
+.call-status.none { color: var(--muted); font-weight: 600; }
+.call-status.booked { color: var(--accent); }
+.call-status.voicemail, .call-status.no_answer { color: #8A5A12; }
+.agent-text .call-status { font-size: 12px; }
+.call-under { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: -6px; }
+.call-flat { font-size: 15px; font-weight: 700; margin: 0; }
+.call-log-title { font-size: 15px; font-weight: 700; }
+.call-log-row { cursor: pointer; }
