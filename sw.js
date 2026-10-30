@@ -1,6 +1,6 @@
 // House Hunt service worker
 // Bump CACHE on every deploy (househunt-v1 → househunt-v2 …) so phones drop the old copy.
-const CACHE = "househunt-v12";
+const CACHE = "househunt-v13";
 
 const APP_FILES = [
   "./",
@@ -24,8 +24,13 @@ const LIBRARIES = [
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    // Cache each file on its own so one slow CDN file can't block the install
-    await Promise.all([...APP_FILES, ...LIBRARIES].map((url) => cache.add(url).catch(() => {})));
+    // Cache each file on its own so one slow CDN file can't block the install.
+    // App files skip Safari's own cache (GitHub lets it keep them for 10 minutes), so a new
+    // version never installs with an old app.jsx.
+    await Promise.all([
+      ...APP_FILES.map((url) => cache.add(new Request(url, { cache: "reload" })).catch(() => {})),
+      ...LIBRARIES.map((url) => cache.add(url).catch(() => {})),
+    ]);
     await self.skipWaiting();
   })());
 });
@@ -45,7 +50,9 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // App files: network first (so updates show straight away), fall back to the cached copy offline
+  // App files: network first (so updates show straight away), fall back to the cached copy offline.
+  // "no-cache" makes Safari check with GitHub every time rather than use its 10-minute copy;
+  // when nothing has changed that check is tiny.
   if (url.origin === self.location.origin) {
     event.respondWith(networkFirst(req));
     return;
@@ -60,7 +67,7 @@ self.addEventListener("fetch", (event) => {
 async function networkFirst(req) {
   const cache = await caches.open(CACHE);
   try {
-    const res = await fetchWithTimeout(req, 4000);
+    const res = await fetchWithTimeout(new Request(req, { cache: "no-cache" }), 4000);
     if (res && res.ok) cache.put(req, res.clone());
     return res;
   } catch (err) {
