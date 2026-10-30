@@ -1,6 +1,6 @@
 // House Hunt service worker
 // Bump CACHE on every deploy (househunt-v1 → househunt-v2 …) so phones drop the old copy.
-const CACHE = "househunt-v11";
+const CACHE = "househunt-v12";
 
 const APP_FILES = [
   "./",

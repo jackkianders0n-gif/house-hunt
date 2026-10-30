@@ -13,7 +13,7 @@ Same setup as the gym tracker: `index.html` + `app.jsx` (React, compiled in the 
 | `supabase/schema.sql` | Tables, access rules, photo storage, live updates, starter checklist — run once |
 | `supabase/functions/hh-import/index.ts` | Edge Function: screenshots/PDF/shared pages → Claude → listing details, map location, inbox, agent details |
 | `shortcut/add-to-house-hunt.js` | The script for the Safari share button Shortcut |
-| `supabase/functions/hh-calendar/index.ts` | Edge Function: your booked viewings as a calendar |
+| `supabase/functions/hh-calendar/index.ts` | Edge Function: puts booked viewings into your shared iCloud calendar |
 
 ## Setup (about 20 minutes)
 
@@ -32,8 +32,17 @@ Everything is in `hh_` tables, so the gym data isn't touched. Only the two accou
 3. Turn **JWT verification off** for this one. The Safari share button can't sign in, so it uses a private import key instead; everything else the function does still checks you're in `hh_members`, so nobody else can spend your API credit.
 
 ### 3. Calendar function
-1. Deploy a second function the same way, named `hh-calendar`, from `supabase/functions/hh-calendar/index.ts`.
-2. In that function's settings, turn **JWT verification off**. Calendar apps can't sign in; instead the function checks a long private key that `schema.sql` created and only you two can read.
+Booked viewings go into a shared iCloud calendar that you both see.
+1. **Make the calendar** (Jack, on iPhone): Calendar → **Calendars** → **Add Calendar** → name it `House hunt`, account **iCloud**. Tap ⓘ next to it → **Add Person** → Jakey. Jakey accepts the invite.
+2. **Make an app-specific password** for the Apple ID that owns the calendar: [account.apple.com](https://account.apple.com) → **Sign-In and Security** → **App-Specific Passwords** → name it `House Hunt`. It lets the function write to your calendars, nothing else, and you can revoke it there any time.
+3. Supabase → Edge Functions → **Secrets** → add:
+   - `ICLOUD_APPLE_ID` — the Apple ID email
+   - `ICLOUD_APP_PASSWORD` — the app-specific password (`xxxx-xxxx-xxxx-xxxx`)
+   - `ICLOUD_CALENDAR` — only if the calendar isn't called `House hunt`
+4. Deploy a second function the same way as the first, named `hh-calendar`, from `supabase/functions/hh-calendar/index.ts`. Turn **JWT verification off**: the database can't sign in, so the function checks a long private key that `schema.sql` created and only you two can read.
+5. In the app: **Settings → Sync all viewings now** once, to add the viewings you already have.
+
+From then on, booking, moving or cancelling a viewing updates the calendar within a few seconds (the database tells the function, so it works however the change was made, including changes made offline once they sync).
 
 ### 4. App config
 At the top of `app.jsx`, paste the same two values the gym tracker uses (Project Settings → API):
@@ -50,7 +59,7 @@ const SUPABASE_ANON_KEY = "eyJ…";
 
 ### 6. First time in the app (either of you)
 - **Settings** (cog on Homes) → enter your council's yearly **council tax** for each band, so running costs include it. Change the **short-lease warning** if 85 years isn't right for you.
-- **Settings → Subscribe in Calendar** on each phone, so booked viewings appear in Calendar.
+- **Settings → Sync all viewings now** once, after setting up the calendar in step 3.
 
 ### 7. Safari share button (optional, each phone)
 See [Safari share button](#safari-share-button) below.
@@ -59,7 +68,7 @@ See [Safari share button](#safari-share-button) below.
 - **Share from Safari:** on a Rightmove listing, tap Share → **Add to House Hunt**. It lands in the **Inbox** (tray icon on Homes) while Claude reads it, usually within a minute. Tap it when it says *Ready to check*. It reads the whole page, including the collapsed sections, so lease, service charge and council tax come through more often than with screenshots.
 - **Import:** the other way is Safari → screenshot the listing → **Full Page** → save as PDF to Files → add it in Import. Screenshots and pasted text work too. Paste the Rightmove link (Share → Copy) so duplicates are caught.
 - **Duplicates and changes:** importing a flat you already have offers to update it instead. On any home, **Update from Rightmove** shows what's changed (price drops, Under offer, Sold STC) before saving. Your address, pin, agent, status, checklist and notes are kept.
-- **Viewings:** tap the status pill to move a home along. When you book a viewing, add the full address and postcode from the agent — the pin moves to the door and Directions go there. **Add to calendar** puts that one viewing straight into Calendar.
+- **Viewings:** tap the status pill to move a home along. When you book a viewing, add the full address and postcode from the agent — the pin moves to the door and Directions go there. The viewing appears in your shared House hunt calendar by itself.
 - **At the viewing:** ticks, notes, status changes and offers save even with no signal. A bar at the top shows how many changes are waiting; they sync on their own when you're back online.
 - **Ratings:** on each home, tap your stars (1–5) under the viewing box; tap the same star again to clear it. Both your ratings show on the home cards.
 - **Sorting:** tap **Sorted by…** above the list to sort by status, our rating, price, size, £ per sq ft, lease left, service charge or running costs. Each starts best first; tap the same option again to flip it. Homes without that detail go to the end, and figures not already on the cards show in a green tag.
@@ -117,6 +126,6 @@ After changing any file, bump `CACHE` in `sw.js` (`househunt-v1` → `househunt-
 - Anyone with the import key can add listings to your inbox, so keep it to yourselves.
 - Saving a new home, photos, agents and imports need signal. Ticks, notes, status, viewing times and offers don't.
 - If you both edit the same notes at once, the last save wins. Ticks always merge.
-- The calendar feed refreshes about once an hour on iPhone; "Add to calendar" is instant.
-- Anyone with the calendar link can see your viewings, so keep it to yourselves.
+- Viewings in the House hunt calendar are replaced whenever the home changes in the app, so edit them in the app, not in Calendar. Events you add to that calendar yourselves are left alone.
+- If a viewing doesn't appear, Settings shows the last error from iCloud under **Viewings in iCloud Calendar**.
 - Map © OpenStreetMap contributors. Address lookup uses OpenStreetMap (Nominatim) and postcodes.io. PDF reading in the app uses pdf.js.
