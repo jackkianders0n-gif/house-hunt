@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.7.1";
+const APP_VERSION = "1.7.2";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -3064,6 +3064,8 @@ const shortName = (address) => {
 
 function CompareScreen({ store }) {
   const candidates = sortHomes(store.properties.filter((p) => p.status !== "not_for_us"));
+  // Not for us homes aren't picked by default, but can still be chosen (and unticked) in Choose homes
+  const ruledOut = sortHomes(store.properties.filter((p) => p.status === "not_for_us"));
   const [ids, setIds] = useState(() => loadJSON("hh-compare", null));
   const [choosing, setChoosing] = useState(false);
   useEffect(() => { if (ids) saveJSON("hh-compare", ids); }, [ids]);
@@ -3103,7 +3105,7 @@ function CompareScreen({ store }) {
         <p className="eyebrow">Jack and Jakey’s house hunt</p>
         <div className="head-row" style={{ alignItems: "flex-end" }}>
           <h1 className="title">Compare</h1>
-          {candidates.length > 1 && <button type="button" className="btn btn-outline btn-pill" onClick={() => setChoosing(true)}>Choose homes</button>}
+          {store.properties.length > 1 && <button type="button" className="btn btn-outline btn-pill" onClick={() => setChoosing(true)}>Choose homes</button>}
         </div>
       </header>
       <main className="scroll">
@@ -3152,14 +3154,14 @@ function CompareScreen({ store }) {
         )}
       </main>
       {choosing && (
-        <ChooseSheet candidates={candidates} selected={chosen.map((p) => p.id)} onClose={() => setChoosing(false)}
+        <ChooseSheet candidates={candidates} ruledOut={ruledOut} selected={chosen.map((p) => p.id)} onClose={() => setChoosing(false)}
           onSave={(next) => { setIds(next); setChoosing(false); }} />
       )}
     </div>
   );
 }
 
-function ChooseSheet({ candidates, selected, onClose, onSave }) {
+function ChooseSheet({ candidates, ruledOut, selected, onClose, onSave }) {
   const [picked, setPicked] = useState(selected);
   const toggle = (id) => setPicked((x) => {
     if (x.includes(id)) return x.filter((i) => i !== id);
@@ -3168,19 +3170,24 @@ function ChooseSheet({ candidates, selected, onClose, onSave }) {
   });
   return (
     <Sheet title={`Choose up to ${NUMBER_WORDS[COMPARE_MAX]}`} onClose={onClose} footer={<button type="button" className="btn btn-primary" onClick={() => onSave(picked)}>Compare</button>}>
-      <div className="card option-list">
-        {candidates.map((p) => (
-          <button key={p.id} type="button" className="option" aria-pressed={picked.includes(p.id)} onClick={() => toggle(p.id)}>
-            <span className="check-box" style={picked.includes(p.id) ? { background: "#1E6A50", borderColor: "#1E6A50" } : undefined}>
-              {picked.includes(p.id) && <Icon name="check" size={16} stroke={3} />}
-            </span>
-            <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <span>{p.address}</span>
-              <span className="hint" style={{ fontSize: 12 }}>{money(p.price)} · {STATUS[p.status].label}</span>
-            </span>
-          </button>
-        ))}
-      </div>
+      {[candidates, ruledOut].map((homes, i) => homes.length > 0 && (
+        <React.Fragment key={i}>
+          {i === 1 && <h2 className="section-title">Not for us</h2>}
+          <div className="card option-list">
+            {homes.map((p) => (
+              <button key={p.id} type="button" className="option" aria-pressed={picked.includes(p.id)} onClick={() => toggle(p.id)}>
+                <span className="check-box" style={picked.includes(p.id) ? { background: "#1E6A50", borderColor: "#1E6A50" } : undefined}>
+                  {picked.includes(p.id) && <Icon name="check" size={16} stroke={3} />}
+                </span>
+                <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span>{p.address}</span>
+                  <span className="hint" style={{ fontSize: 12 }}>{money(p.price)} · {STATUS[p.status].label}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </React.Fragment>
+      ))}
     </Sheet>
   );
 }
