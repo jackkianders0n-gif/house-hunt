@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.6.0";
+const APP_VERSION = "1.7.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -207,8 +207,7 @@ const importFunctionUrl = () => `${SUPABASE_URL}/functions/v1/hh-import`;
 const newKey = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
 const webHref = (url) => (/^https?:\/\//i.test(url || "") ? url : `https://${url}`);
 const hostOf = (url) => { try { return new URL(webHref(url)).hostname.replace(/^www\./, ""); } catch (e) { return url; } };
-const calendarUrl = (key, id) =>
-  `${SUPABASE_URL}/functions/v1/hh-calendar?key=${encodeURIComponent(key)}${id ? `&id=${encodeURIComponent(id)}` : ""}`;
+const calendarFunctionUrl = () => `${SUPABASE_URL}/functions/v1/hh-calendar`;
 const normAgency = (s) =>
   String(s || "").toLowerCase().replace(/&/g, " and ")
     .replace(/\b(estate agents?|ltd|limited|llp|plc)\b/g, " ")
@@ -2296,7 +2295,6 @@ function PropertyScreen({ store, id, tab }) {
   const score = checklistScore(p, store.items);
   const onChecklist = tab === "checklist";
   const reduced = lastReduction(p);
-  const calendarKey = typeof store.settings.calendar_key === "string" ? store.settings.calendar_key : null;
 
   return (
     <div className="screen">
@@ -2346,9 +2344,6 @@ function PropertyScreen({ store, id, tab }) {
               <div className="text">
                 <span className="label">Viewing</span>
                 <span className="value">{p.viewing_at ? fmtViewing(p.viewing_at) : "Not booked"}</span>
-                {p.viewing_at && calendarKey && (
-                  <a className="small-link" href={calendarUrl(calendarKey, p.id)} target="_blank" rel="noopener">Add to calendar</a>
-                )}
               </div>
               <button type="button" className="link-btn" onClick={() => setSheet("viewing")}>{p.viewing_at ? "Change" : "Add"}</button>
             </div>
@@ -3168,7 +3163,8 @@ function SettingsScreen({ store, session }) {
   }, [store.settings]);
   const changed = JSON.stringify(list.map((i) => [i.id, i.label])) !== JSON.stringify(store.items.map((i) => [i.id, i.label]));
   const calendarKey = typeof store.settings.calendar_key === "string" ? store.settings.calendar_key : null;
-  const feed = calendarKey ? calendarUrl(calendarKey).replace(/^https:/, "webcal:") : null;
+  const icloud = store.settings.icloud_status && typeof store.settings.icloud_status === "object" ? store.settings.icloud_status : null;
+  const [syncing, setSyncing] = useState(false);
   const importKey = typeof store.settings.import_key === "string" ? store.settings.import_key : null;
 
   const move = (i, dir) => setList((l) => {
@@ -3199,7 +3195,22 @@ function SettingsScreen({ store, session }) {
     try { await navigator.clipboard.writeText(text); toast(`${what} copied`); }
     catch (e) { window.prompt(`Copy this ${what.toLowerCase()}`, text); }
   };
-  const copyFeed = () => copy(feed, "Link");
+  const syncCalendar = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch(calendarFunctionUrl(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-calendar-key": calendarKey },
+        body: JSON.stringify({ all: true }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 405) throw new Error("Redeploy the hh-calendar function in Supabase first");
+      if (!res.ok || !j.ok) throw new Error(j.error || `Couldn't sync (error ${res.status})`);
+      toast(j.count === 1 ? "1 viewing in iCloud" : `${j.count} viewings in iCloud`);
+    } catch (e) {
+      toast(isNetworkError(e) ? "No signal — syncing needs a connection" : e.message, "error");
+    } finally { setSyncing(false); }
+  };
   const remakeKey = async () => {
     if (!window.confirm("Make a new key? The share button stops working on both phones until you paste the new key into the Shortcut.")) return;
     try { await store.saveSetting("import_key", newKey()); toast("New key made — paste it into the Shortcut"); }
@@ -3249,15 +3260,22 @@ function SettingsScreen({ store, session }) {
         </section>
 
         <section className="section">
-          <h2 className="section-title">Viewings in your calendar</h2>
-          {feed ? (
+          <h2 className="section-title">Viewings in iCloud Calendar</h2>
+          {calendarKey ? (
             <>
-              <p className="hint">Subscribe once on each phone and every booked viewing appears in Calendar, with the address and agent. Calendar checks for changes about once an hour.</p>
-              <a className="btn btn-primary" href={feed}><Icon name="calendar" size={18} stroke={2} />Subscribe in Calendar</a>
-              <button type="button" className="btn btn-outline" onClick={copyFeed}><Icon name="copy" size={18} stroke={2} />Copy link</button>
-              <p className="hint">Keep this link private: anyone with it can see your viewings.</p>
+              <p className="hint">
+                Booked viewings go into your shared House hunt calendar in iCloud within a few seconds, with the address, agent and a
+                reminder an hour before. Moving or cancelling a viewing updates it there too. Setup is in{" "}
+                <a href="https://github.com/jackkianders0n-gif/house-hunt#3-calendar-function" target="_blank" rel="noopener">the README</a>.
+              </p>
+              {icloud && (icloud.ok
+                ? <p className="hint">Last updated {fmtWhen(icloud.at)}</p>
+                : <p className="hint warn-text">{icloud.error || "The last update didn't go through."}</p>)}
+              <button type="button" className="btn btn-outline" onClick={syncCalendar} disabled={syncing}>
+                <Icon name="refresh" size={18} stroke={2} />{syncing ? "Syncing…" : "Sync all viewings now"}
+              </button>
             </>
-          ) : <p className="hint">The calendar link isn't set up yet. Run the latest schema.sql in Supabase.</p>}
+          ) : <p className="hint">The calendar isn't set up yet. Run the latest schema.sql in Supabase.</p>}
         </section>
 
         <section className="section">

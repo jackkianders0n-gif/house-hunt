@@ -332,7 +332,7 @@ where not exists (select 1 from public.hh_checklist_items);
 
 
 -- Shared settings: short-lease warning at 85 years, council tax amounts
--- (fill these in from the app's Settings), and private keys for the calendar feed
+-- (fill these in from the app's Settings), and private keys for the calendar
 -- and for the Safari share button
 insert into public.hh_settings (key, value) values
   ('lease_warning_years', '85'::jsonb),
@@ -341,6 +341,60 @@ insert into public.hh_settings (key, value) values
   ('import_key', to_jsonb(replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')))
 on conflict (key) do nothing;
 
+
+
+-- iCloud calendar: when a viewing is booked, moved or cancelled (or the home's
+-- address, price, agent or status changes), tell the hh-calendar function so it
+-- updates the shared iCloud calendar. Uses pg_net, Supabase's built-in web requests.
+create extension if not exists pg_net;
+
+create or replace function public.hh_calendar_push()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  k text;
+begin
+  select value #>> '{}' into k from public.hh_settings where key = 'calendar_key';
+  if k is not null then
+    perform net.http_post(
+      url     := 'https://wvedhcuebfdfkhfvphlb.supabase.co/functions/v1/hh-calendar',
+      body    := jsonb_build_object('id', case when tg_op = 'DELETE' then old.id else new.id end),
+      headers := jsonb_build_object('Content-Type', 'application/json', 'x-calendar-key', k)
+    );
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.hh_calendar_push() from public;
+
+drop trigger if exists hh_properties_calendar_insert on public.hh_properties;
+create trigger hh_properties_calendar_insert after insert on public.hh_properties
+  for each row when (new.viewing_at is not null)
+  execute function public.hh_calendar_push();
+
+drop trigger if exists hh_properties_calendar_update on public.hh_properties;
+create trigger hh_properties_calendar_update after update on public.hh_properties
+  for each row when (
+    old.viewing_at is distinct from new.viewing_at
+    or (new.viewing_at is not null and (
+      old.status is distinct from new.status
+      or old.address is distinct from new.address
+      or old.postcode is distinct from new.postcode
+      or old.price is distinct from new.price
+      or old.agent_id is distinct from new.agent_id
+      or old.rightmove_url is distinct from new.rightmove_url
+      or old.lat is distinct from new.lat
+      or old.lng is distinct from new.lng))
+  )
+  execute function public.hh_calendar_push();
+
+drop trigger if exists hh_properties_calendar_delete on public.hh_properties;
+create trigger hh_properties_calendar_delete after delete on public.hh_properties
+  for each row when (old.viewing_at is not null)
+  execute function public.hh_calendar_push();
 
 -- 7. Add the two of you as members.
 --    Replace the emails with the ones you both sign in to the gym tracker with.
