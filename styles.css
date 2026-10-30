@@ -452,6 +452,7 @@ button.pill { height: 32px; padding: 0 10px 0 12px; border-radius: 16px; font-si
 .sheet-foot .btn { flex: 1; }
 .sheet-body:last-child { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
 .option-list { display: flex; flex-direction: column; overflow: hidden; }
+.sheet-body > .option-list { flex-shrink: 0; } /* long lists scroll the sheet instead of being squashed */
 .option {
   display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 16px; width: 100%;
   border: 0; border-bottom: 1px solid var(--line-soft); background: var(--surface); text-align: left;
