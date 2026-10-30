@@ -65,6 +65,11 @@ img { display: block; }
   background: var(--warn-bg); color: var(--warn-fg); font-size: 13px; font-weight: 700;
 }
 .offline-bar + .screen .page-head, .offline-bar + .screen .bar-head { padding-top: 12px; }
+.offline-bar + .offline-bar { padding-top: 6px; }
+.update-bar {
+  display: block; width: 100%; min-height: 44px; border: 0; font-family: inherit;
+  background: var(--accent); color: #fff; cursor: pointer;
+}
 
 /* ---------- Headers ---------- */
 .page-head {

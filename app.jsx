@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.7.1";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -917,6 +917,43 @@ function TabBar({ active }) {
       {tab("agents", sessionStorage.getItem("hh-agents-view") === "calls" ? "#/calls" : "#/agents", "users", "Agents")}
       {tab("compare", "#/compare", "compare", "Compare")}
     </nav>
+  );
+}
+// When you come back to the app, ask for a new service worker (sw.js changes on every deploy).
+// Once one takes over, check its app.jsx really is a newer version before offering a reload,
+// so a half-filled form is never wiped without asking.
+function useUpdateReady() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const sw = navigator.serviceWorker;
+    if (!sw) return;
+    let hadController = !!sw.controller;
+    const onChange = async () => {
+      if (!hadController) { hadController = true; return; } // first install, nothing to update
+      try {
+        const text = await (await fetch("app.jsx", { cache: "no-cache" })).text();
+        const latest = text.match(/const APP_VERSION = "([^"]+)"/)?.[1];
+        if (latest && latest !== APP_VERSION) setReady(true);
+      } catch (e) { /* offline: try again next time */ }
+    };
+    const check = () => {
+      if (document.visibilityState === "visible") sw.getRegistration().then((r) => r && r.update()).catch(() => {});
+    };
+    sw.addEventListener("controllerchange", onChange);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      sw.removeEventListener("controllerchange", onChange);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, []);
+  return ready;
+}
+function UpdateBar() {
+  if (!useUpdateReady()) return null;
+  return (
+    <button type="button" className="offline-bar update-bar" onClick={() => window.location.reload()}>
+      Update ready — tap to reload
+    </button>
   );
 }
 function SyncBar({ store }) {
@@ -3413,6 +3450,7 @@ function Main({ session }) {
 
   return (
     <div className="app">
+      <UpdateBar />
       <SyncBar store={store} />
       {screen}
       {tab && <TabBar active={tab} />}
