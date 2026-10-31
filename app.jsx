@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.8.0";
+const APP_VERSION = "1.9.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -31,10 +31,18 @@ const STATUSES = [
   { key: "viewed", label: "Viewed", short: "Viewed", bg: "#DDEFE8", fg: "#175640", pin: "#1E6A50" },
   { key: "offer_made", label: "Offer made", short: "Offer", bg: "#ECE6F8", fg: "#4A3282", pin: "#4A3282" },
   { key: "offer_accepted", label: "Offer accepted", short: "Accepted", bg: "#1E6A50", fg: "#FFFFFF", pin: "#123F2F" },
+  { key: "viewed_not_for_us", label: "Viewed, not for us", short: "Viewed, no", bg: "#EAEBE8", fg: "#55595A", pin: "#6B6F6C" },
   { key: "not_for_us", label: "Not for us", short: "Not for us", bg: "#EAEBE8", fg: "#55595A", pin: "#6B6F6C" },
 ];
 const STATUS = Object.fromEntries(STATUSES.map((s) => [s.key, s]));
-const SORT_ORDER = { offer_accepted: 0, offer_made: 1, viewing_booked: 2, viewed: 3, shortlisted: 4, not_for_us: 5 };
+const SORT_ORDER = { offer_accepted: 0, offer_made: 1, viewing_booked: 2, viewed: 3, shortlisted: 4, viewed_not_for_us: 5, not_for_us: 6 };
+// Ruled out: left out of All, the call list, the map key and Compare's default picks.
+// "Viewed, not for us" keeps its viewing in the calendar; plain "Not for us" doesn't.
+const isRuledOut = (p) => p.status === "not_for_us" || p.status === "viewed_not_for_us";
+// "Viewed, not for us" is only offered once a home has been viewed
+const hasBeenViewed = (status, viewingAt) =>
+  ["viewed", "offer_made", "offer_accepted", "viewed_not_for_us"].includes(status) || (!!viewingAt && new Date(viewingAt) < new Date());
+const statusChoices = (status, viewingAt) => STATUSES.filter((s) => s.key !== "viewed_not_for_us" || hasBeenViewed(status, viewingAt));
 const TENURES = ["Leasehold", "Freehold", "Share of freehold", "Commonhold"];
 const LISTING_STATUSES = ["Available", "Under offer", "Sold STC", "Reserved"];
 const BANDS = ["A", "B", "C", "D", "E", "F", "G", "H"];
@@ -1001,8 +1009,8 @@ function Homes({ store, view }) {
   const { properties } = store;
   const counts = {};
   properties.forEach((p) => { counts[p.status] = (counts[p.status] || 0) + 1; });
-  // "Not for us" homes only show when you tap their chip
-  const allPool = properties.filter((p) => p.status !== "not_for_us");
+  // Ruled-out homes only show when you tap their chip
+  const allPool = properties.filter((p) => !isRuledOut(p));
   const active = filter !== "all" && !counts[filter] ? "all" : filter;
   const pool = active === "all" ? allPool : properties.filter((p) => p.status === active);
   const sort = SORT[sortKey];
@@ -1123,7 +1131,7 @@ function PropertyCard({ p, store, tag }) {
   const facts = factsLine(p);
   const reduced = lastReduction(p);
   return (
-    <a className={"card prop-card" + (p.status === "not_for_us" ? " dim" : "")} href={`#/property/${p.id}`}>
+    <a className={"card prop-card" + (isRuledOut(p) ? " dim" : "")} href={`#/property/${p.id}`}>
       <div className="prop-top">
         <Thumb url={store.photoUrl(p.photo_path)} />
         <div className="prop-main">
@@ -1174,7 +1182,7 @@ function CallListScreen({ store }) {
   const [mode, setMode] = useState(() => sessionStorage.getItem("hh-calls-mode") || "tobook");
   useEffect(() => { sessionStorage.setItem("hh-calls-mode", mode); }, [mode]);
   const [logging, setLogging] = useState(null);
-  const active = store.properties.filter((p) => p.status !== "not_for_us");
+  const active = store.properties.filter((p) => !isRuledOut(p));
   const toBook = active.filter((p) => p.status === "shortlisted" && !p.viewing_at);
   const list = sortHomesBy(mode === "tobook" ? toBook : active, SORT.rating, false, store.settings);
   return (
@@ -1242,7 +1250,7 @@ function CallSheet({ store, pending, propertyId: givenProperty, agentId: givenAg
   const propertyId = pending ? pending.propertyId : givenProperty;
   const agent = store.agentById[agentId];
   const primary = store.properties.find((x) => x.id === propertyId);
-  const others = agent ? sortHomes(store.properties.filter((x) => x.agent_id === agent.id && x.status !== "not_for_us" && x.id !== propertyId)) : [];
+  const others = agent ? sortHomes(store.properties.filter((x) => x.agent_id === agent.id && !isRuledOut(x) && x.id !== propertyId)) : [];
   const flats = [primary, ...others].filter(Boolean);
   const start = pending ? new Date(pending.at) : new Date();
   const [picked, setPicked] = useState(() => (primary ? [primary.id] : flats.length === 1 ? [flats[0].id] : []));
@@ -1473,7 +1481,7 @@ function HomesMap({ homes, store }) {
     <div className="map-wrap">
       <div className="map" ref={el} aria-label="Map of homes" />
       <div className="map-legend" aria-hidden="true">
-        {STATUSES.filter((s) => s.key !== "not_for_us").map((s) => <span key={s.key}><i style={{ background: s.pin }} />{s.short}</span>)}
+        {STATUSES.filter((s) => !isRuledOut({ status: s.key })).map((s) => <span key={s.key}><i style={{ background: s.pin }} />{s.short}</span>)}
       </div>
       {unplaced > 0 && <span className="map-note">{unplaced} without a location — add it from Edit</span>}
       {!window.L && <p className="center-msg">The map couldn't load. Check your connection.</p>}
@@ -2223,7 +2231,8 @@ function ReviewScreen({ store, initial, focus }) {
           <div className="grid2">
             <Field label="Status" id="status">
               <select id="status" className="select" value={d.status} onChange={(e) => set("status", e.target.value)}>
-                {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                {statusChoices(d.status, d.viewing_date ? `${d.viewing_date}T${d.viewing_time || "12:00"}` : null)
+                  .map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
               </select>
             </Field>
             <Field label="On Rightmove" id="listing_status">
@@ -2414,7 +2423,7 @@ function PropertyScreen({ store, id, tab }) {
       {sheet === "status" && (
         <Sheet title="Status" onClose={() => setSheet(null)}>
           <div className="card option-list">
-            {STATUSES.map((s) => (
+            {statusChoices(p.status, p.viewing_at).map((s) => (
               <button key={s.key} type="button" className="option" onClick={() => {
                 setSheet(s.key === "viewing_booked" && !p.viewing_at ? "viewing" : s.key === "offer_made" && !store.offersFor(p.id).length ? { offer: null } : null);
                 if (s.key !== p.status) store.patchProperty(p.id, { status: s.key }).catch(() => {});
@@ -2670,7 +2679,7 @@ function DetailsTab({ p, agent, store, onOffer }) {
 }
 
 function AskAgent({ p }) {
-  if (p.status === "not_for_us") return null;
+  if (isRuledOut(p)) return null;
   const freehold = p.tenure === "Freehold";
   const asks = ASK_FIELDS.filter((f) => !(f.leaseOnly && freehold) && (p[f.key] == null || p[f.key] === ""));
   if (!asks.length) return null;
@@ -3076,9 +3085,9 @@ const shortName = (address) => {
 };
 
 function CompareScreen({ store }) {
-  const candidates = sortHomes(store.properties.filter((p) => p.status !== "not_for_us"));
-  // Not for us homes aren't picked by default, but can still be chosen (and unticked) in Choose homes
-  const ruledOut = sortHomes(store.properties.filter((p) => p.status === "not_for_us"));
+  const candidates = sortHomes(store.properties.filter((p) => !isRuledOut(p)));
+  // Ruled-out homes aren't picked by default, but can still be chosen (and unticked) in Choose homes
+  const ruledOut = sortHomes(store.properties.filter(isRuledOut));
   const [ids, setIds] = useState(() => loadJSON("hh-compare", null));
   const [choosing, setChoosing] = useState(false);
   useEffect(() => { if (ids) saveJSON("hh-compare", ids); }, [ids]);

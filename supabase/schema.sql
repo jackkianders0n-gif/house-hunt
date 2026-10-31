@@ -75,7 +75,7 @@ create table if not exists public.hh_properties (
   agent_id        uuid references public.hh_agents(id) on delete set null,
   status          text not null default 'shortlisted'
                   check (status in ('shortlisted','viewing_booked','viewed',
-                                    'offer_made','offer_accepted','not_for_us')),
+                                    'offer_made','offer_accepted','viewed_not_for_us','not_for_us')),
   viewing_at      timestamptz,
   lat             double precision,
   lng             double precision,
@@ -149,6 +149,12 @@ create table if not exists public.hh_inbox (
   updated_at    timestamptz not null default now()
 );
 
+
+-- "Viewed, not for us" status (added after the table was first made)
+alter table public.hh_properties drop constraint if exists hh_properties_status_check;
+alter table public.hh_properties add constraint hh_properties_status_check
+  check (status in ('shortlisted','viewing_booked','viewed',
+                    'offer_made','offer_accepted','viewed_not_for_us','not_for_us'));
 
 -- 3. Keep updated_at current
 create or replace function public.hh_touch_updated_at()
