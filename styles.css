@@ -548,7 +548,9 @@ button.inbox-main { cursor: pointer; }
 .rating-row .who { font-size: 15px; font-weight: 800; }
 .stars { display: inline-flex; align-items: center; color: #B7791F; }
 .stars .star { display: inline-flex; align-items: center; justify-content: center; color: #C9CFC8; }
-.stars .star.on { color: #B7791F; }
+.stars .star.on, .stars .star.half { color: #B7791F; }
+.star-shape { position: relative; display: inline-flex; }
+.star-half { position: absolute; top: 0; left: 0; bottom: 0; width: 50%; overflow: hidden; }
 .stars button.star { width: 40px; height: 44px; border: 0; background: none; padding: 0; cursor: pointer; }
 .stars.read { gap: 2px; }
 .ratings-card .hint { margin: 0; font-size: 12px; }

@@ -253,21 +253,22 @@ as $$
 $$;
 grant execute on function public.hh_set_check(uuid, uuid, boolean) to authenticated;
 
--- Set your own star rating (1–5, or 0 to clear) without touching the other person's
-create or replace function public.hh_set_rating(p_property uuid, p_value integer)
+-- Set your own star rating (0.5–5 in halves, or 0 to clear) without touching the other person's
+drop function if exists public.hh_set_rating(uuid, integer);
+create or replace function public.hh_set_rating(p_property uuid, p_value numeric)
 returns jsonb
 language sql
 security invoker
 set search_path = public
 as $$
   update public.hh_properties
-     set ratings = case when p_value between 1 and 5
+     set ratings = case when p_value between 0.5 and 5 and p_value * 2 = trunc(p_value * 2)
                         then jsonb_set(ratings, array[auth.uid()::text], to_jsonb(p_value), true)
                         else ratings - auth.uid()::text end
    where id = p_property
   returning ratings;
 $$;
-grant execute on function public.hh_set_rating(uuid, integer) to authenticated;
+grant execute on function public.hh_set_rating(uuid, numeric) to authenticated;
 
 -- Your two names, so the app can label each rating (members only)
 create or replace function public.hh_member_names()
