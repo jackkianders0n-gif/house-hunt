@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.7.2";
+const APP_VERSION = "1.8.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -126,12 +126,14 @@ const initials = (a) => {
   const words = src.replace(/[^A-Za-z ]/g, " ").split(/\s+/).filter(Boolean);
   return ((words[0]?.[0] || "?") + (words[1]?.[0] || "")).toUpperCase();
 };
+// Ratings go from half a star to five, in halves
+const isRating = (v) => v >= 0.5 && v <= 5 && Number.isInteger(v * 2);
 const ratingOf = (p, userId) => {
   const v = Number(p.ratings?.[userId]);
-  return v >= 1 && v <= 5 ? v : null;
+  return isRating(v) ? v : null;
 };
 const averageRating = (p) => {
-  const vals = Object.values(p.ratings || {}).map(Number).filter((v) => v >= 1 && v <= 5);
+  const vals = Object.values(p.ratings || {}).map(Number).filter(isRating);
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 };
 // Ways to order the homes list. best: which end is best ("asc" = lowest first). tag: shown on cards when
@@ -461,7 +463,7 @@ function runQueued(e) {
 const sortCalls = (calls) => [...calls].sort((a, b) => (b.called_at || "").localeCompare(a.called_at || ""));
 function withRating(ratings, userId, value) {
   const next = { ...(ratings || {}) };
-  if (value >= 1 && value <= 5) next[userId] = value;
+  if (isRating(value)) next[userId] = value;
   else delete next[userId];
   return next;
 }
@@ -1363,22 +1365,33 @@ function RatingLine({ p, members }) {
   );
 }
 
+// Tapping a star fills it; tapping it again makes it a half; a third time clears the rating
+const nextRating = (value, n) => (value === n ? n - 0.5 : value === n - 0.5 ? 0 : n);
 function Stars({ value, onChange, label }) {
+  const size = onChange ? 30 : 18;
+  const svg = (filled) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"
+      fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+      {ICONS.star}
+    </svg>
+  );
   return (
     <span className={"stars" + (onChange ? "" : " read")} role={onChange ? "radiogroup" : "img"}
       aria-label={onChange ? label : `${label}: ${value ? `${value} out of 5` : "not rated"}`}>
       {[1, 2, 3, 4, 5].map((n) => {
         const on = value != null && n <= value;
+        const half = value === n - 0.5;
+        const cls = "star" + (on ? " on" : half ? " half" : "");
         const star = (
-          <svg width={onChange ? 30 : 18} height={onChange ? 30 : 18} viewBox="0 0 24 24" aria-hidden="true"
-            fill={on ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
-            {ICONS.star}
-          </svg>
+          <span className="star-shape">
+            {svg(on)}
+            {half && <span className="star-half">{svg(true)}</span>}
+          </span>
         );
-        if (!onChange) return <span key={n} className={"star" + (on ? " on" : "")}>{star}</span>;
+        if (!onChange) return <span key={n} className={cls}>{star}</span>;
         return (
-          <button key={n} type="button" className={"star" + (on ? " on" : "")} role="radio" aria-checked={value === n}
-            aria-label={`${n} star${n === 1 ? "" : "s"}`} onClick={() => onChange(value === n ? 0 : n)}>
+          <button key={n} type="button" className={cls} role="radio" aria-checked={on && value === n || half}
+            aria-label={half ? `${n - 0.5} stars` : `${n} star${n === 1 ? "" : "s"}`} onClick={() => onChange(nextRating(value, n))}>
             {star}
           </button>
         );
@@ -1406,7 +1419,7 @@ function RatingsCard({ p, store }) {
             : <span className="hint">Not rated yet</span>}
         </div>
       ))}
-      {mine && <p className="hint">Tap your stars to rate. Tap the same star again to clear it.</p>}
+      {mine && <p className="hint">Tap a star to rate. Tap it again for half a star, and a third time to clear it.</p>}
     </section>
   );
 }
