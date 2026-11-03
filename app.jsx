@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "1.10.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -27,22 +27,24 @@ const MAX_PDF_BYTES = 8 * 1024 * 1024;
 // ---------------------------------------------------------------------------
 const STATUSES = [
   { key: "shortlisted", label: "Shortlisted", short: "Shortlisted", bg: "#E4EAF3", fg: "#2B4566", pin: "#2B4566" },
-  { key: "viewing_booked", label: "Viewing booked", short: "Booked", bg: "#FCEBD2", fg: "#774708", pin: "#8A5509" },
+  { key: "viewing_booked", label: "Viewing booked", short: "Booked", bg: "#F6E1F0", fg: "#86266E", pin: "#A8358B" },
   { key: "viewed", label: "Viewed", short: "Viewed", bg: "#DDEFE8", fg: "#175640", pin: "#1E6A50" },
+  { key: "contender", label: "Contender", short: "Contender", bg: "#F8EBC4", fg: "#6E4D05", pin: "#B7791F" },
   { key: "offer_made", label: "Offer made", short: "Offer", bg: "#ECE6F8", fg: "#4A3282", pin: "#4A3282" },
   { key: "offer_accepted", label: "Offer accepted", short: "Accepted", bg: "#1E6A50", fg: "#FFFFFF", pin: "#123F2F" },
   { key: "viewed_not_for_us", label: "Viewed, not for us", short: "Viewed, no", bg: "#EAEBE8", fg: "#55595A", pin: "#6B6F6C" },
   { key: "not_for_us", label: "Not for us", short: "Not for us", bg: "#EAEBE8", fg: "#55595A", pin: "#6B6F6C" },
 ];
 const STATUS = Object.fromEntries(STATUSES.map((s) => [s.key, s]));
-const SORT_ORDER = { offer_accepted: 0, offer_made: 1, viewing_booked: 2, viewed: 3, shortlisted: 4, viewed_not_for_us: 5, not_for_us: 6 };
+const SORT_ORDER = { offer_accepted: 0, offer_made: 1, contender: 2, viewing_booked: 3, viewed: 4, shortlisted: 5, viewed_not_for_us: 6, not_for_us: 7 };
 // Ruled out: left out of All, the call list, the map key and Compare's default picks.
 // "Viewed, not for us" keeps its viewing in the calendar; plain "Not for us" doesn't.
 const isRuledOut = (p) => p.status === "not_for_us" || p.status === "viewed_not_for_us";
-// "Viewed, not for us" is only offered once a home has been viewed
+// Contender and "Viewed, not for us" are only offered once a home has been viewed
+const AFTER_VIEWING = ["contender", "viewed_not_for_us"];
 const hasBeenViewed = (status, viewingAt) =>
-  ["viewed", "offer_made", "offer_accepted", "viewed_not_for_us"].includes(status) || (!!viewingAt && new Date(viewingAt) < new Date());
-const statusChoices = (status, viewingAt) => STATUSES.filter((s) => s.key !== "viewed_not_for_us" || hasBeenViewed(status, viewingAt));
+  ["viewed", "contender", "offer_made", "offer_accepted", "viewed_not_for_us"].includes(status) || (!!viewingAt && new Date(viewingAt) < new Date());
+const statusChoices = (status, viewingAt) => STATUSES.filter((s) => !AFTER_VIEWING.includes(s.key) || hasBeenViewed(status, viewingAt));
 const TENURES = ["Leasehold", "Freehold", "Share of freehold", "Commonhold"];
 const LISTING_STATUSES = ["Available", "Under offer", "Sold STC", "Reserved"];
 const BANDS = ["A", "B", "C", "D", "E", "F", "G", "H"];
