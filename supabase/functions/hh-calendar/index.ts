@@ -31,7 +31,8 @@ function json(body: unknown, status = 200): Response {
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
 
-const HOME_FIELDS = "id, address, postcode, price, status, viewing_at, lat, lng, rightmove_url, agent_id, updated_at";
+const HOME_FIELDS = "id, address, postcode, price, status, viewing_at, second_viewing_at, lat, lng, rightmove_url, agent_id, updated_at";
+const HAS_A_VIEWING = "viewing_at.not.is.null,second_viewing_at.not.is.null";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -67,12 +68,12 @@ Deno.serve(async (req: Request) => {
   }
 
   const id = url.searchParams.get("id");
-  let query = admin.from("hh_properties").select(HOME_FIELDS).not("viewing_at", "is", null);
+  let query = admin.from("hh_properties").select(HOME_FIELDS).or(HAS_A_VIEWING);
   query = id ? query.eq("id", id) : query.neq("status", "not_for_us");
   const { data: homes, error } = await query;
   if (error) return new Response("Couldn't load viewings", { status: 500 });
 
-  const body = buildCalendar(homes ?? [], await loadAgents(admin, homes ?? []), id ? "single" : "feed");
+  const body = buildCalendar((homes ?? []).flatMap(viewingsOf), await loadAgents(admin, homes ?? []), id ? "single" : "feed");
   return new Response(req.method === "HEAD" ? null : body, {
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
@@ -93,7 +94,18 @@ async function loadAgents(admin: any, homes: any[]): Promise<Record<string, any>
 }
 
 // Which homes belong in the calendar: a viewing time, and not ruled out
-const wanted = (h: any) => h && h.viewing_at && h.status !== "not_for_us";
+// Each home has up to two viewings. The first is stored in iCloud as <home id>.ics, the second as <home id>-2.ics.
+type Viewing = { home: any; at: string; n: 1 | 2 };
+const SLOTS: { n: 1 | 2; field: string; suffix: string }[] = [
+  { n: 1, field: "viewing_at", suffix: "" },
+  { n: 2, field: "second_viewing_at", suffix: "-2" },
+];
+// Which viewings belong in the calendar: booked, on a home that isn't ruled out without a viewing
+function viewingsOf(h: any): Viewing[] {
+  if (!h || h.status === "not_for_us") return [];
+  return SLOTS.filter((s) => h[s.field]).map((s) => ({ home: h, at: h[s.field], n: s.n }));
+}
+const fileName = (v: { home: any; n: 1 | 2 }) => `${v.home.id}${v.n === 2 ? "-2" : ""}.ics`;
 
 class FriendlyError extends Error {}
 
@@ -102,8 +114,13 @@ async function syncOne(admin: any, id: string) {
     const cal = await findCalendar();
     const { data: home, error } = await admin.from("hh_properties").select(HOME_FIELDS).eq("id", id).maybeSingle();
     if (error) throw new FriendlyError("Couldn't load the home");
-    if (wanted(home)) await putEvent(cal, home, await loadAgents(admin, [home]));
-    else await deleteEvent(cal, `${cal.url}${id}.ics`);
+    const keep = viewingsOf(home);
+    const agents = keep.length ? await loadAgents(admin, [home]) : {};
+    for (const s of SLOTS) {
+      const v = keep.find((x) => x.n === s.n);
+      if (v) await putEvent(cal, v, agents);
+      else await deleteEvent(cal, `${cal.url}${id}${s.suffix}.ics`);
+    }
     return await saveStatus(admin, { ok: true });
   } catch (e) {
     return await saveStatus(admin, { ok: false, error: messageOf(e) });
@@ -113,18 +130,18 @@ async function syncOne(admin: any, id: string) {
 async function syncAll(admin: any) {
   try {
     const cal = await findCalendar();
-    const { data: homes, error } = await admin.from("hh_properties").select(HOME_FIELDS).not("viewing_at", "is", null);
+    const { data: homes, error } = await admin.from("hh_properties").select(HOME_FIELDS).or(HAS_A_VIEWING);
     if (error) throw new FriendlyError("Couldn't load viewings");
-    const keep = (homes ?? []).filter(wanted);
-    const agents = await loadAgents(admin, keep);
-    for (const h of keep) await putEvent(cal, h, agents);
+    const keep = (homes ?? []).flatMap(viewingsOf);
+    const agents = await loadAgents(admin, keep.map((v) => v.home));
+    for (const v of keep) await putEvent(cal, v, agents);
     // Remove events for viewings that have gone. Only touch events this app made
-    // (named <home id>.ics), never ones you've added to the calendar yourselves.
-    const keepIds = new Set(keep.map((h: any) => h.id));
+    // (named <home id>.ics or <home id>-2.ics), never ones you've added to the calendar yourselves.
+    const keepNames = new Set(keep.map(fileName));
     let removed = 0;
     for (const href of await listEvents(cal)) {
-      const m = href.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.ics$/i);
-      if (m && !keepIds.has(m[1].toLowerCase())) { await deleteEvent(cal, new URL(href, cal.url).href); removed++; }
+      const m = href.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-2)?\.ics)$/i);
+      if (m && !keepNames.has(m[1].toLowerCase())) { await deleteEvent(cal, new URL(href, cal.url).href); removed++; }
     }
     return await saveStatus(admin, { ok: true, count: keep.length, removed });
   } catch (e) {
@@ -218,12 +235,12 @@ async function findCalendar(): Promise<Calendar> {
   return cachedCalendar;
 }
 
-async function putEvent(cal: Calendar, home: any, agents: Record<string, any>) {
-  const res = await dav(`${cal.url}${home.id}.ics`, cal.auth, "PUT", {
-    body: buildCalendar([home], agents, "caldav"),
+async function putEvent(cal: Calendar, v: Viewing, agents: Record<string, any>) {
+  const res = await dav(`${cal.url}${fileName(v)}`, cal.auth, "PUT", {
+    body: buildCalendar([v], agents, "caldav"),
     type: "text/calendar; charset=utf-8",
   });
-  if (!res.ok) throw new FriendlyError(`iCloud wouldn't save the viewing at ${home.address} (error ${res.status}).`);
+  if (!res.ok) throw new FriendlyError(`iCloud wouldn't save the viewing at ${v.home.address} (error ${res.status}).`);
   await res.body?.cancel();
 }
 
@@ -282,15 +299,15 @@ function fold(line: string): string {
 
 // kind: "feed" (subscription), "single" (one viewing to open), "caldav" (one event stored in iCloud,
 // which mustn't carry METHOD)
-function buildCalendar(homes: any[], agents: Record<string, any>, kind: "feed" | "single" | "caldav"): string {
+function buildCalendar(viewings: Viewing[], agents: Record<string, any>, kind: "feed" | "single" | "caldav"): string {
   const now = icsDate(new Date());
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//House Hunt//Viewings//EN", "CALSCALE:GREGORIAN"];
   if (kind !== "caldav") lines.push("METHOD:PUBLISH");
   if (kind === "feed") {
     lines.push("X-WR-CALNAME:House hunt viewings", "REFRESH-INTERVAL;VALUE=DURATION:PT1H", "X-PUBLISHED-TTL:PT1H");
   }
-  for (const h of homes) {
-    const start = new Date(h.viewing_at);
+  for (const { home: h, at, n } of viewings) {
+    const start = new Date(at);
     const end = new Date(start.getTime() + 30 * 60 * 1000);
     const agent = h.agent_id ? agents[h.agent_id] : null;
     const where = [h.address, h.postcode].filter(Boolean).join(", ");
@@ -301,18 +318,18 @@ function buildCalendar(homes: any[], agents: Record<string, any>, kind: "feed" |
     ].filter(Boolean).join("\n");
     lines.push(
       "BEGIN:VEVENT",
-      `UID:${h.id}@house-hunt`,
+      `UID:${h.id}${n === 2 ? "-2" : ""}@house-hunt`,
       `DTSTAMP:${now}`,
       `LAST-MODIFIED:${icsDate(new Date(h.updated_at ?? Date.now()))}`,
       `DTSTART:${icsDate(start)}`,
       `DTEND:${icsDate(end)}`,
-      `SUMMARY:${escapeText(`Viewing: ${h.address}`)}`,
+      `SUMMARY:${escapeText(`${n === 2 ? "2nd viewing" : "Viewing"}: ${h.address}`)}`,
       `LOCATION:${escapeText(where)}`,
     );
     if (h.lat != null && h.lng != null) lines.push(`GEO:${h.lat};${h.lng}`);
     if (details) lines.push(`DESCRIPTION:${escapeText(details)}`);
     if (h.rightmove_url) lines.push(`URL:${h.rightmove_url}`);
-    lines.push("BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:Viewing in an hour", "TRIGGER:-PT1H", "END:VALARM", "END:VEVENT");
+    lines.push("BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:" + (n === 2 ? "2nd viewing" : "Viewing") + " in an hour", "TRIGGER:-PT1H", "END:VALARM", "END:VEVENT");
   }
   lines.push("END:VCALENDAR");
   return lines.map(fold).join("\r\n") + "\r\n";

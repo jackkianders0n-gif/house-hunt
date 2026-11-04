@@ -11,7 +11,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://wvedhcuebfdfkhfvphlb.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_bkeGnvruQEz3MsVDZiJ03g_bhXXDjgC";
-const APP_VERSION = "1.10.0";
+const APP_VERSION = "1.11.0";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "hh-auth" },
@@ -30,21 +30,39 @@ const STATUSES = [
   { key: "viewing_booked", label: "Viewing booked", short: "Booked", bg: "#F6E1F0", fg: "#86266E", pin: "#A8358B" },
   { key: "viewed", label: "Viewed", short: "Viewed", bg: "#DDEFE8", fg: "#175640", pin: "#1E6A50" },
   { key: "contender", label: "Contender", short: "Contender", bg: "#F8EBC4", fg: "#6E4D05", pin: "#B7791F" },
+  { key: "second_viewing_booked", label: "Second viewing booked", short: "2nd booked", bg: "#EBC3DF", fg: "#6B1656", pin: "#7A1C63" },
   { key: "offer_made", label: "Offer made", short: "Offer", bg: "#ECE6F8", fg: "#4A3282", pin: "#4A3282" },
   { key: "offer_accepted", label: "Offer accepted", short: "Accepted", bg: "#1E6A50", fg: "#FFFFFF", pin: "#123F2F" },
   { key: "viewed_not_for_us", label: "Viewed, not for us", short: "Viewed, no", bg: "#EAEBE8", fg: "#55595A", pin: "#6B6F6C" },
   { key: "not_for_us", label: "Not for us", short: "Not for us", bg: "#EAEBE8", fg: "#55595A", pin: "#6B6F6C" },
 ];
 const STATUS = Object.fromEntries(STATUSES.map((s) => [s.key, s]));
-const SORT_ORDER = { offer_accepted: 0, offer_made: 1, contender: 2, viewing_booked: 3, viewed: 4, shortlisted: 5, viewed_not_for_us: 6, not_for_us: 7 };
+const SORT_ORDER = { offer_accepted: 0, offer_made: 1, second_viewing_booked: 2, contender: 3, viewing_booked: 4, viewed: 5, shortlisted: 6, viewed_not_for_us: 7, not_for_us: 8 };
 // Ruled out: left out of All, the call list, the map key and Compare's default picks.
 // "Viewed, not for us" keeps its viewing in the calendar; plain "Not for us" doesn't.
 const isRuledOut = (p) => p.status === "not_for_us" || p.status === "viewed_not_for_us";
-// Contender and "Viewed, not for us" are only offered once a home has been viewed
-const AFTER_VIEWING = ["contender", "viewed_not_for_us"];
+// Contender, Second viewing booked and "Viewed, not for us" are only offered once a home has been viewed
+const AFTER_VIEWING = ["contender", "second_viewing_booked", "viewed_not_for_us"];
+const isPast = (iso) => !!iso && new Date(iso) < new Date();
 const hasBeenViewed = (status, viewingAt) =>
-  ["viewed", "contender", "offer_made", "offer_accepted", "viewed_not_for_us"].includes(status) || (!!viewingAt && new Date(viewingAt) < new Date());
+  ["viewed", "contender", "second_viewing_booked", "offer_made", "offer_accepted", "viewed_not_for_us"].includes(status) || isPast(viewingAt);
 const statusChoices = (status, viewingAt) => STATUSES.filter((s) => !AFTER_VIEWING.includes(s.key) || hasBeenViewed(status, viewingAt));
+
+// A home can have two viewings: viewing_at and second_viewing_at
+const VIEWING_FIELD = { 1: "viewing_at", 2: "second_viewing_at" };
+const viewingsOf = (p) => [1, 2].filter((n) => p[VIEWING_FIELD[n]]).map((n) => ({ n, at: p[VIEWING_FIELD[n]] }));
+const nextViewing = (p) => viewingsOf(p).filter((v) => !isPast(v.at)).sort((a, b) => a.at.localeCompare(b.at))[0] || null;
+const viewingText = (v, first = "Viewing") => `${v.n === 2 ? "2nd viewing" : first} ${fmtViewing(v.at)}`.trim();
+// Booking a viewing once the home has been seen means booking the second one
+const bookingSlot = (p) => (p.viewing_at && hasBeenViewed(p.status, p.viewing_at) ? 2 : 1);
+// Statuses that move along when a viewing is booked
+const BOOKED_FROM = { 1: ["shortlisted"], 2: ["viewing_booked", "viewed", "contender"] };
+const BOOKED_STATUS = { 1: "viewing_booked", 2: "second_viewing_booked" };
+function viewingPatch(p, n, iso) {
+  const patch = { [VIEWING_FIELD[n]]: iso };
+  if (iso && BOOKED_FROM[n].includes(p.status)) patch.status = BOOKED_STATUS[n];
+  return patch;
+}
 const TENURES = ["Leasehold", "Freehold", "Share of freehold", "Commonhold"];
 const LISTING_STATUSES = ["Available", "Under offer", "Sold STC", "Reserved"];
 const BANDS = ["A", "B", "C", "D", "E", "F", "G", "H"];
@@ -208,7 +226,8 @@ const sortHomes = (list) =>
   [...list].sort((a, b) => {
     const s = (SORT_ORDER[a.status] ?? 9) - (SORT_ORDER[b.status] ?? 9);
     if (s) return s;
-    if (a.status === "viewing_booked" && a.viewing_at && b.viewing_at) return a.viewing_at.localeCompare(b.viewing_at);
+    const f = a.status === "viewing_booked" ? "viewing_at" : a.status === "second_viewing_booked" ? "second_viewing_at" : null;
+    if (f && a[f] && b[f]) return a[f].localeCompare(b[f]);
     return (b.created_at || "").localeCompare(a.created_at || "");
   });
 const directionsHref = (p) =>
@@ -1118,11 +1137,13 @@ function offerSummary(offer) {
 function cardMeta(p, store) {
   const latest = store.offersFor(p.id)[0];
   if ((p.status === "offer_made" || p.status === "offer_accepted") && latest) return offerSummary(latest);
-  if (p.status === "viewing_booked" && p.viewing_at) return fmtViewing(p.viewing_at);
+  const next = nextViewing(p);
+  if ((p.status === "viewing_booked" || p.status === "second_viewing_booked") && next) return viewingText(next, "");
   const score = checklistScore(p, store.items);
   if (score > 0) return `Checklist ${score}/${store.items.length}`;
-  if (p.viewing_at && new Date(p.viewing_at) < new Date()) return `Viewed ${fmtDay(p.viewing_at)}`;
-  if (p.viewing_at) return fmtViewing(p.viewing_at);
+  if (next) return viewingText(next, "");
+  const seen = viewingsOf(p).filter((v) => isPast(v.at)).pop();
+  if (seen) return `Viewed ${fmtDay(seen.at)}`;
   if (p.status === "shortlisted" && p.created_at) return `Added ${fmtDay(p.created_at)}`;
   return "";
 }
@@ -1231,7 +1252,7 @@ function CallListScreen({ store }) {
               </div>
               <div className="call-foot">
                 {p.viewing_at
-                  ? <span className="call-status booked">Viewing {fmtViewing(p.viewing_at)}</span>
+                  ? <span className="call-status booked">{viewingText(nextViewing(p) || viewingsOf(p).pop())}</span>
                   : <CallStatus call={store.lastCallFor(p.id)} store={store} />}
                 {agent
                   ? <button type="button" className="link-btn" onClick={() => setLogging(p)}>Log a call</button>
@@ -1260,9 +1281,11 @@ function CallSheet({ store, pending, propertyId: givenProperty, agentId: givenAg
   const [date, setDate] = useState(dateInput(start));
   const [time, setTime] = useState(timeInput(start));
   const [note, setNote] = useState("");
+  // A booking fills in the first viewing, or the second once the home has been seen
   const [viewings, setViewings] = useState(() => Object.fromEntries(flats.map((x) => {
-    const v = x.viewing_at ? new Date(x.viewing_at) : null;
-    return [x.id, { date: v ? dateInput(v) : "", time: v ? timeInput(v) : "" }];
+    const n = bookingSlot(x);
+    const v = x[VIEWING_FIELD[n]] ? new Date(x[VIEWING_FIELD[n]]) : null;
+    return [x.id, { n, date: v ? dateInput(v) : "", time: v ? timeInput(v) : "" }];
   })));
   const [busy, setBusy] = useState(false);
   const toggle = (id) => setPicked((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
@@ -1284,9 +1307,7 @@ function CallSheet({ store, pending, propertyId: givenProperty, agentId: givenAg
         if (status === "queued") queued = true;
         const v = viewings[id];
         if (outcome === "booked" && v?.date && home) {
-          const patch = { viewing_at: new Date(`${v.date}T${v.time || "12:00"}`).toISOString() };
-          if (home.status === "shortlisted") patch.status = "viewing_booked";
-          await store.patchProperty(id, patch);
+          await store.patchProperty(id, viewingPatch(home, v.n, new Date(`${v.date}T${v.time || "12:00"}`).toISOString()));
         }
       }
       toast(queued ? "Saved on this phone — it'll sync when you're back online" : picked.length > 1 ? `Logged for ${picked.length} flats` : "Call logged");
@@ -1338,7 +1359,7 @@ function CallSheet({ store, pending, propertyId: givenProperty, agentId: givenAg
         if (!x) return null;
         return (
           <div key={id} className="grid2">
-            <Field label={picked.length > 1 ? `Viewing: ${shortName(x.address)}` : "Viewing date"} id={"vd-" + id}>
+            <Field label={`${viewings[id]?.n === 2 ? "2nd viewing" : "Viewing"}${picked.length > 1 ? `: ${shortName(x.address)}` : " date"}`} id={"vd-" + id}>
               <input id={"vd-" + id} className="input" type="date" value={viewings[id]?.date || ""} onChange={(e) => setViewing(id, "date", e.target.value)} />
             </Field>
             <Field label="Time" id={"vt-" + id}>
@@ -1492,7 +1513,7 @@ function HomesMap({ homes, store }) {
           <Thumb url={store.photoUrl(selected.photo_path)} size={68} />
           <span className="info">
             <StatusPill status={selected.status}>
-              {selected.status === "viewing_booked" && selected.viewing_at ? `Viewing ${fmtViewing(selected.viewing_at)}` : undefined}
+              {(selected.status === "viewing_booked" || selected.status === "second_viewing_booked") && nextViewing(selected) ? viewingText(nextViewing(selected)) : undefined}
             </StatusPill>
             <span className="prop-address">{selected.address}</span>
             <span className="prop-price" style={{ fontSize: 15 }}>{money(selected.price)}</span>
@@ -1516,7 +1537,7 @@ function emptyDraft(link = "") {
     mode: "new", id: uuid(), fromImport: false,
     address: "", postcode: "", price: "", beds: "", baths: "", size_sqft: "", tenure: "", lease_years: "",
     service_charge: "", ground_rent: "", council_tax: "", listing_status: "", key_features: [], rightmove_url: link,
-    status: "shortlisted", viewing_date: "", viewing_time: "",
+    status: "shortlisted", viewing_date: "", viewing_time: "", second_viewing_date: "", second_viewing_time: "",
     lat: null, lng: null, precision: "none",
     agentChoice: "none", agentMatched: false, newAgent: { ...EMPTY_AGENT }, lookup: null,
     photo: null, photoCandidate: null, existingPhotoPath: null, photoRemoved: false,
@@ -1550,6 +1571,7 @@ function draftFromListing(listing, location, photo, sourceLabel, link, store) {
 
 function draftFromProperty(p) {
   const v = p.viewing_at ? new Date(p.viewing_at) : null;
+  const v2 = p.second_viewing_at ? new Date(p.second_viewing_at) : null;
   return {
     ...emptyDraft(),
     mode: "edit", id: p.id,
@@ -1559,6 +1581,7 @@ function draftFromProperty(p) {
     listing_status: p.listing_status || "", key_features: p.key_features || [], rightmove_url: p.rightmove_url || "",
     status: p.status,
     viewing_date: v ? dateInput(v) : "", viewing_time: v ? timeInput(v) : "",
+    second_viewing_date: v2 ? dateInput(v2) : "", second_viewing_time: v2 ? timeInput(v2) : "",
     lat: p.lat, lng: p.lng, precision: p.lat != null ? "manual" : "none",
     agentChoice: p.agent_id || "none",
     existingPhotoPath: p.photo_path || null,
@@ -1989,6 +2012,7 @@ function ReviewScreen({ store, initial, focus }) {
       const previous = store.properties.find((p) => p.id === d.id);
       const history = Array.isArray(previous?.price_history) ? previous.price_history : [];
       const viewingAt = d.viewing_date ? new Date(`${d.viewing_date}T${d.viewing_time || "12:00"}`).toISOString() : null;
+      const secondAt = d.second_viewing_date ? new Date(`${d.second_viewing_date}T${d.second_viewing_time || "12:00"}`).toISOString() : null;
       const row = {
         id: d.id,
         address: d.address.trim(),
@@ -2003,6 +2027,8 @@ function ReviewScreen({ store, initial, focus }) {
         agent_id: agentId,
         status: d.status,
         viewing_at: viewingAt,
+        // Only sent when there is or was a second viewing, so saving still works before the column exists
+        ...(secondAt || previous?.second_viewing_at ? { second_viewing_at: secondAt } : {}),
         lat: d.lat, lng: d.lng,
         photo_path: photoPath,
         price_history: previous && previous.price != null && price != null && price !== previous.price
@@ -2248,6 +2274,12 @@ function ReviewScreen({ store, initial, focus }) {
             <Field label="Viewing date" id="viewing_date">{input("viewing_date", { type: "date" })}</Field>
             <Field label="Time" id="viewing_time">{input("viewing_time", { type: "time" })}</Field>
           </div>
+          {(d.viewing_date || d.second_viewing_date) && (
+            <div className="grid2">
+              <Field label="2nd viewing date" id="second_viewing_date">{input("second_viewing_date", { type: "date" })}</Field>
+              <Field label="Time" id="second_viewing_time">{input("second_viewing_time", { type: "time" })}</Field>
+            </div>
+          )}
           <Field label="Rightmove link" id="rightmove_url">{input("rightmove_url", { type: "url", inputMode: "url", placeholder: "Optional" })}</Field>
         </section>
 
@@ -2403,11 +2435,25 @@ function PropertyScreen({ store, id, tab }) {
             <div className="card info-card">
               <Icon name="calendar" color="#1E6A50" stroke={1.8} />
               <div className="text">
-                <span className="label">Viewing</span>
+                <span className="label">{p.second_viewing_at ? "1st viewing" : "Viewing"}</span>
                 <span className="value">{p.viewing_at ? fmtViewing(p.viewing_at) : "Not booked"}</span>
               </div>
               <button type="button" className="link-btn" onClick={() => setSheet("viewing")}>{p.viewing_at ? "Change" : "Add"}</button>
             </div>
+            {p.second_viewing_at ? (
+              <div className="card info-card">
+                <Icon name="calendar" color="#1E6A50" stroke={1.8} />
+                <div className="text">
+                  <span className="label">2nd viewing</span>
+                  <span className="value">{fmtViewing(p.second_viewing_at)}</span>
+                </div>
+                <button type="button" className="link-btn" onClick={() => setSheet("viewing2")}>Change</button>
+              </div>
+            ) : p.viewing_at && (
+              <button type="button" className="btn btn-outline" onClick={() => setSheet("viewing2")}>
+                <Icon name="plus" size={18} stroke={2.2} />Add second viewing
+              </button>
+            )}
             <RatingsCard p={p} store={store} />
           </>
         )}
@@ -2427,7 +2473,7 @@ function PropertyScreen({ store, id, tab }) {
           <div className="card option-list">
             {statusChoices(p.status, p.viewing_at).map((s) => (
               <button key={s.key} type="button" className="option" onClick={() => {
-                setSheet(s.key === "viewing_booked" && !p.viewing_at ? "viewing" : s.key === "offer_made" && !store.offersFor(p.id).length ? { offer: null } : null);
+                setSheet(s.key === "viewing_booked" && !p.viewing_at ? "viewing" : s.key === "second_viewing_booked" && !p.second_viewing_at ? "viewing2" : s.key === "offer_made" && !store.offersFor(p.id).length ? { offer: null } : null);
                 if (s.key !== p.status) store.patchProperty(p.id, { status: s.key }).catch(() => {});
               }}>
                 <StatusPill status={s.key} />
@@ -2437,14 +2483,16 @@ function PropertyScreen({ store, id, tab }) {
           </div>
         </Sheet>
       )}
-      {sheet === "viewing" && <ViewingSheet p={p} store={store} onClose={() => setSheet(null)} />}
+      {sheet === "viewing" && <ViewingSheet p={p} n={1} store={store} onClose={() => setSheet(null)} />}
+      {sheet === "viewing2" && <ViewingSheet p={p} n={2} store={store} onClose={() => setSheet(null)} />}
       {sheet && typeof sheet === "object" && <OfferSheet p={p} offer={sheet.offer} store={store} onClose={() => setSheet(null)} />}
     </div>
   );
 }
 
-function ViewingSheet({ p, store, onClose }) {
-  const v = p.viewing_at ? new Date(p.viewing_at) : null;
+function ViewingSheet({ p, n, store, onClose }) {
+  const field = VIEWING_FIELD[n];
+  const v = p[field] ? new Date(p[field]) : null;
   const [date, setDate] = useState(v ? dateInput(v) : "");
   const [time, setTime] = useState(v ? timeInput(v) : "");
   const [address, setAddress] = useState(p.address || "");
@@ -2453,9 +2501,7 @@ function ViewingSheet({ p, store, onClose }) {
 
   const save = async () => {
     setBusy(true);
-    const viewing_at = date ? new Date(`${date}T${time || "12:00"}`).toISOString() : null;
-    const patch = { viewing_at };
-    if (viewing_at && p.status === "shortlisted") patch.status = "viewing_booked";
+    const patch = viewingPatch(p, n, date ? new Date(`${date}T${time || "12:00"}`).toISOString() : null);
     const addressChanged = address.trim() && (address.trim() !== p.address || postcode.trim() !== (p.postcode || ""));
     if (addressChanged) { patch.address = address.trim(); patch.postcode = postcode.trim() || null; }
     try {
@@ -2476,9 +2522,9 @@ function ViewingSheet({ p, store, onClose }) {
     }
   };
   return (
-    <Sheet title="Viewing" onClose={onClose} footer={
+    <Sheet title={n === 2 ? "Second viewing" : "Viewing"} onClose={onClose} footer={
       <>
-        {p.viewing_at && <button type="button" className="btn btn-outline" onClick={() => { onClose(); store.patchProperty(p.id, { viewing_at: null }).catch(() => {}); }}>Clear</button>}
+        {p[field] && <button type="button" className="btn btn-outline" onClick={() => { onClose(); store.patchProperty(p.id, { [field]: null }).catch(() => {}); }}>Clear</button>}
         <button type="button" className="btn btn-primary" onClick={save} disabled={busy}>Save</button>
       </>
     }>
@@ -2495,7 +2541,7 @@ function ViewingSheet({ p, store, onClose }) {
       <Field label="Postcode" id="v-postcode">
         <input id="v-postcode" className="input" value={postcode} autoCapitalize="characters" onChange={(e) => setPostcode(e.target.value)} />
       </Field>
-      {p.status === "shortlisted" && <p className="hint">Saving a date moves this home to Viewing booked.</p>}
+      {BOOKED_FROM[n].includes(p.status) && <p className="hint">Saving a date moves this home to {STATUS[BOOKED_STATUS[n]].label}.</p>}
     </Sheet>
   );
 }
