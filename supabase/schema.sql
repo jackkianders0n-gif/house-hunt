@@ -74,7 +74,7 @@ create table if not exists public.hh_properties (
   rightmove_url   text,
   agent_id        uuid references public.hh_agents(id) on delete set null,
   status          text not null default 'shortlisted'
-                  check (status in ('shortlisted','viewing_booked','viewed','contender',
+                  check (status in ('shortlisted','viewing_booked','viewed','contender','second_viewing_booked',
                                     'offer_made','offer_accepted','viewed_not_for_us','not_for_us')),
   viewing_at      timestamptz,
   lat             double precision,
@@ -150,10 +150,13 @@ create table if not exists public.hh_inbox (
 );
 
 
--- "Viewed, not for us" status (added after the table was first made)
+-- Second viewings (a home can have two)
+alter table public.hh_properties add column if not exists second_viewing_at timestamptz;
+
+-- Statuses added after the table was first made: Viewed, not for us; Contender; Second viewing booked
 alter table public.hh_properties drop constraint if exists hh_properties_status_check;
 alter table public.hh_properties add constraint hh_properties_status_check
-  check (status in ('shortlisted','viewing_booked','viewed','contender',
+  check (status in ('shortlisted','viewing_booked','viewed','contender','second_viewing_booked',
                     'offer_made','offer_accepted','viewed_not_for_us','not_for_us'));
 
 -- 3. Keep updated_at current
@@ -379,14 +382,15 @@ revoke all on function public.hh_calendar_push() from public;
 
 drop trigger if exists hh_properties_calendar_insert on public.hh_properties;
 create trigger hh_properties_calendar_insert after insert on public.hh_properties
-  for each row when (new.viewing_at is not null)
+  for each row when (new.viewing_at is not null or new.second_viewing_at is not null)
   execute function public.hh_calendar_push();
 
 drop trigger if exists hh_properties_calendar_update on public.hh_properties;
 create trigger hh_properties_calendar_update after update on public.hh_properties
   for each row when (
     old.viewing_at is distinct from new.viewing_at
-    or (new.viewing_at is not null and (
+    or old.second_viewing_at is distinct from new.second_viewing_at
+    or ((new.viewing_at is not null or new.second_viewing_at is not null) and (
       old.status is distinct from new.status
       or old.address is distinct from new.address
       or old.postcode is distinct from new.postcode
@@ -400,7 +404,7 @@ create trigger hh_properties_calendar_update after update on public.hh_propertie
 
 drop trigger if exists hh_properties_calendar_delete on public.hh_properties;
 create trigger hh_properties_calendar_delete after delete on public.hh_properties
-  for each row when (old.viewing_at is not null)
+  for each row when (old.viewing_at is not null or old.second_viewing_at is not null)
   execute function public.hh_calendar_push();
 
 -- 7. Add the two of you as members.
